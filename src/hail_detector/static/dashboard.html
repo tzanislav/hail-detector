@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hail detector</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="/static/dashboard.css" />
+  </head>
+  <body>
+    <main class="dashboard-shell">
+      <section class="map-panel" aria-label="Primary radar map">
+        <div id="map" aria-label="Radar map"></div>
+        <div class="map-identity" aria-label="Hail detector">
+          <span class="map-identity__name">Hail<span>Detector</span></span>
+          <span class="map-identity__detail">OPERA radar monitor</span>
+        </div>
+        <p class="map-gesture-hint">
+          <span class="map-gesture-hint__desktop">Ctrl + scroll to zoom</span>
+          <span class="map-gesture-hint__touch">Use two fingers to pan. Scroll to browse.</span>
+        </p>
+        <div class="map-legend" aria-label="Map legend">
+          <span><i class="legend opera"></i> OPERA maximum reflectivity</span>
+          <span><i class="legend radar"></i> Yarlovo CAPPI</span>
+          <span><i class="legend cell"></i> Radar cell</span>
+          <span><i class="legend track"></i> Smoothed storm track</span>
+          <span><i class="legend history"></i> Prior-frame maximum dBZ</span>
+          <span><i class="legend prediction"></i> Projection</span>
+          <span><i class="legend target"></i> Target radius</span>
+        </div>
+        <div class="map-timeline" aria-label="OPERA frame history">
+          <button id="liveButton" class="map-timeline__live is-live" type="button">Live</button>
+          <input id="timelineSlider" type="range" min="0" max="0" value="0" disabled aria-label="Archived OPERA frame" />
+          <output id="timelineLabel" for="timelineSlider">Loading history...</output>
+        </div>
+      </section>
+
+      <section class="track-section" aria-labelledby="trackHeading">
+        <header class="section-heading">
+          <p class="eyebrow">LIVE OBSERVATIONS</p>
+          <h1 id="trackHeading">Storm tracks</h1>
+          <p>Observed OPERA maximum-reflectivity cells and their short-horizon projections.</p>
+        </header>
+        <div id="trackList" class="track-list"><p class="muted">Loading storm tracks...</p></div>
+      </section>
+
+      <section class="action-row" aria-label="Radar controls">
+        <p>Radar signature visualisation only. This is not an official meteorological warning service.</p>
+        <div class="action-row__buttons">
+          <button id="refreshButton" type="button">Refresh view</button>
+          <button id="fetchButton" class="button-primary" type="button">Fetch latest</button>
+        </div>
+      </section>
+
+      <section class="status-area" aria-label="Radar status">
+        <p id="staleNotice" class="notice hidden" aria-live="polite"></p>
+        <div class="status-strip">
+          <div class="status-item"><span>Primary radar age</span><strong id="radarAge">--</strong></div>
+          <div class="status-item"><span>Yarlovo age</span><strong id="yarlovoAge">--</strong></div>
+          <div class="status-item"><span>Tracked cells</span><strong id="trackCount">--</strong></div>
+          <div class="status-item"><span>Target intersections</span><strong id="intersectionCount">--</strong></div>
+          <div class="status-item"><span>Active alerts</span><strong id="alertCount">--</strong></div>
+          <div class="status-source"><span>Primary source</span><strong id="sourceSummary">Waiting for OPERA data</strong></div>
+          <span id="stateBadge" class="badge">Loading</span>
+        </div>
+      </section>
+    </main>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="/static/dashboard.js"></script>
+  </body>
+</html>

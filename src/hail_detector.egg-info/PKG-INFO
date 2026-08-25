@@ -1,0 +1,75 @@
+Metadata-Version: 2.4
+Name: hail-detector
+Version: 0.1.0
+Summary: A cautious radar-signature hail detector for a configured Sofia location.
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: apscheduler<4,>=3.11
+Requires-Dist: fastapi<1,>=0.115
+Requires-Dist: h5py<4,>=3.11
+Requires-Dist: httpx<1,>=0.28
+Requires-Dist: numpy<3,>=1.26
+Requires-Dist: pillow<13,>=10
+Requires-Dist: pyproj<4,>=3.6
+Requires-Dist: uvicorn[standard]<1,>=0.30
+Provides-Extra: dev
+Requires-Dist: pytest<10,>=8; extra == "dev"
+
+# Hail detector
+
+This repository currently implements the **Yarlovo radar ingestion and calibration** milestone. It does not yet track storms or send alerts.
+
+The service fetches the public Yarlovo manifest, accepts only CAPPI frame filenames, preserves original PNGs, checks feed age conservatively, records a dBZ-band calibration summary, segments significant radar cores, and links those cells into storm tracks. It does not yet forecast track arrival or issue alerts. The source investigation and collected fixtures are in [`research/yarlovo-radar-investigation.md`](research/yarlovo-radar-investigation.md).
+
+## Run locally
+
+Use two processes in separate terminals:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m hail_detector.poller
+```
+
+```powershell
+.\.venv\Scripts\uvicorn.exe hail_detector.api:app --app-dir src --reload
+```
+
+The debug dashboard is at `http://127.0.0.1:8000/`. The status API is at `http://127.0.0.1:8000/status`; `/tracks` exposes the persisted cell-track state; `/health` returns HTTP 503 until a fresh valid CAPPI frame has been archived.
+
+The dashboard uses Leaflet and OpenStreetMap tiles to display the original transparent radar PNG over its published bounds, the configured target radius, segmented cells, tracks, projections, assessments, and alert lifecycle. A stale feed is intentionally shown as a prominent amber warning, not as a healthy live detection view.
+
+## Configuration
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `HAIL_ARCHIVE_DIR` | `var/radar` | Runtime archive location. |
+| `HAIL_MANIFEST_URL` | Yarlovo active JSON manifest | Override only for testing or a verified source change. |
+| `HAIL_SOURCE_TIMEZONE` | `Europe/Sofia` | Timezone applied to the source filename timestamp. This fails safely if the source's timezone remains uncertain. |
+| `HAIL_MAX_FRAME_AGE_MINUTES` | `10` | A newer valid CAPPI frame is required for a `ready` status. |
+| `HAIL_POLL_INTERVAL_SECONDS` | `240` | Poll cadence. |
+| `HAIL_SEGMENT_MINIMUM_DBZ` | `35` | Lower dBZ bound required to include a validated pixel in a storm cell. |
+| `HAIL_SEGMENT_MINIMUM_PIXELS` | `4` | Smallest retained 8-connected cell. |
+| `HAIL_TRACKER_MAXIMUM_GAP_MINUTES` | `12` | Longest gap over which a cell can retain its storm-track ID. |
+| `HAIL_TRACKER_MAXIMUM_SPEED_KMH` | `160` | Association speed gate; this is not a weather forecast. |
+| `HAIL_TARGET_LATITUDE` / `HAIL_TARGET_LONGITUDE` | Sofia centre (`42.6977`, `23.3219`) | Development defaults for the fixed target. Set these to the actual protected location before alerts are built. |
+| `HAIL_WARNING_RADIUS_KM` | `10` | Target-radius intersection used by the projection layer. |
+| `HAIL_FORECAST_HORIZON_MINUTES` | `90` | Maximum constant-velocity projection horizon. |
+| `HAIL_HIGH_DBZ_CALIBRATION_VALIDATED` | `false` | Safety gate: candidate Watches/Warnings remain suppressed until real 55+ dBZ PNG colours are verified. |
+| `HAIL_WATCH_MINIMUM_DBZ` / `HAIL_WARNING_MINIMUM_DBZ` / `HAIL_SEVERE_MINIMUM_DBZ` | `55` / `60` / `65` | Conservative lower-bound dBZ thresholds for the provisional radar-signature policy. |
+| `HAIL_ALERT_EXPIRY_MINUTES` | `20` | Fresh non-qualifying observations required before an active candidate alert expires. Stale data never expires alerts. |
+
+Runtime files under `var/` are intentionally ignored by Git. The poller stores original frames, source-manifest snapshots, per-frame calibration summaries, storm-cell analyses, persistent track state, assessments, alert decision audits, and a file-based notification outbox there.
+
+## Verification
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+The tests use the saved Yarlovo frames and do not call the live radar endpoint.
+
+## Safety boundary
+
+This milestone returns observed **radar reflectivity bands**, not confirmed hail. It now also exposes a short-horizon constant-velocity radar-track projection and provisional Watch/Warning *candidates*, clearly separate from a meteorological forecast or official warning. High-end (50+ dBZ) raw colours have not yet been validated from an active-convection capture, so candidates are deliberately suppressed until that safety gate is opened.
+
+The notification layer currently writes transition events to a local file outbox only. It deduplicates unchanged candidates, escalates a Watch to a Warning, records de-escalation/expiry, and refuses to mutate state when data is stale. An external channel such as Telegram will be added only after its credentials and delivery policy are chosen.

@@ -1,0 +1,2 @@
+[console_scripts]
+hail-detector-poller = hail_detector.poller:main
