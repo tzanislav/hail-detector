@@ -29,6 +29,7 @@ class ArchiveStore:
     def __init__(self, root: Path):
         self.root = root
         self.assessments_dir = root / "assessments"
+        self.hail_risk_research_dir = root / "hail-risk-research"
         self.alerts_dir = root / "alerts"
         self.notification_outbox_dir = root / "notification-outbox"
         self.notification_delivery_dir = root / "notification-delivery"
@@ -302,6 +303,38 @@ class ArchiveStore:
         if not path.is_file():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def read_hail_risk_research_record(self, track_id: str) -> dict[str, Any] | None:
+        """Return the persisted web-research cooldown record for one track."""
+
+        path = self.hail_risk_research_dir / "state.json"
+        if not path.is_file():
+            return None
+        state = json.loads(path.read_text(encoding="utf-8"))
+        tracks = state.get("tracks") if isinstance(state, dict) else None
+        record = tracks.get(track_id) if isinstance(tracks, dict) else None
+        return dict(record) if isinstance(record, dict) else None
+
+    def write_hail_risk_research_record(
+        self,
+        track_id: str,
+        record: dict[str, Any],
+    ) -> Path:
+        """Persist a web-research attempt before or after its API call."""
+
+        path = self.hail_risk_research_dir / "state.json"
+        state: dict[str, Any] = {}
+        if path.is_file():
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                state = loaded
+        tracks = state.get("tracks")
+        if not isinstance(tracks, dict):
+            tracks = {}
+            state["tracks"] = tracks
+        tracks[track_id] = record
+        self._atomic_write(path, self._json_bytes(state))
+        return path
 
     def write_alert_state(self, state: dict[str, Any]) -> Path:
         path = self.alerts_dir / "state.json"

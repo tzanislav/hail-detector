@@ -150,7 +150,12 @@ class AlertLifecycle:
             level = assessment["candidate_level"]
             record = records.get(track_id)
             source = str(assessment.get("source", "eumetnet_opera_dbzh_maximum_reflectivity"))
-            reason = "; ".join(assessment.get("reasons", ()))
+            description = assessment.get("alert_description")
+            reason = (
+                " ".join(description.split())
+                if isinstance(description, str) and description.strip()
+                else "; ".join(assessment.get("reasons", ()))
+            )
             if record is None or record.status == "expired":
                 records[track_id] = AlertRecord(
                     track_id=track_id,

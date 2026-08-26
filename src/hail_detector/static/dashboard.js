@@ -463,8 +463,15 @@ function renderTracks(tracker, assessments, volume) {
     const arrival = forecast?.arrival_window_start ? `Target entry: ${dateLabel(forecast.arrival_window_start)}` : "No target intersection forecast";
     const projection = (forecast?.predicted_positions || []).map((position) => predictionLabel(position.lead_minutes)).join(", ") || "No motion projection";
     const reason = (assessment.reasons || []).slice(-1)[0] || "OPERA maximum-reflectivity observation; no severe alert candidate.";
+    const researchedRisk = assessment.llm_hail_risk;
+    const riskRating = Number(researchedRisk?.rating);
+    const researchDetail = Number.isInteger(riskRating)
+      ? `<p class="reason"><strong>Web-researched hail risk: ${escapeHtml(riskRating)}/10</strong><br />${escapeHtml(researchedRisk?.description || "No research description was returned.")}</p>`
+      : "";
+    const agentConfigured = dashboardData?.status?.hail_risk_agent?.configured === true;
+    const testControl = `<button class="track-test-button" type="button" data-track-id="${escapeHtml(track.track_id)}" ${agentConfigured ? "" : "disabled"} title="Runs a test-only web-researched assessment and logs the result in this browser's console">Test hail-risk agent</button>`;
     const focused = focusedTrackId === track.track_id ? "is-focused" : "";
-    return `<article class="track-card ${style} ${focused}" data-track-id="${escapeHtml(track.track_id)}" tabindex="0" role="button" aria-label="Focus the map on this storm track"><h3>${escapeHtml(level)}</h3><p>Current reflectivity: ${escapeHtml(currentDbzLabel(track))}</p><div class="observation-charts">${renderIntensityHistory(track)}${renderVerticalProfile(volume, track.track_id)}</div><p>${escapeHtml(motion)}</p><p>Projection: ${escapeHtml(projection)}</p><p>${escapeHtml(arrival)}</p><p class="reason">${escapeHtml(reason)}</p></article>`;
+    return `<article class="track-card ${style} ${focused}" data-track-id="${escapeHtml(track.track_id)}" tabindex="0" role="button" aria-label="Focus the map on this storm track"><h3>${escapeHtml(level)}</h3><p>Current reflectivity: ${escapeHtml(currentDbzLabel(track))}</p><div class="observation-charts">${renderIntensityHistory(track)}${renderVerticalProfile(volume, track.track_id)}</div><p>${escapeHtml(motion)}</p><p>Projection: ${escapeHtml(projection)}</p><p>${escapeHtml(arrival)}</p>${researchDetail}<p class="reason">${escapeHtml(reason)}</p>${testControl}</article>`;
   }).join("");
 }
 
@@ -602,11 +609,45 @@ document.getElementById("timelineSlider").addEventListener("input", (event) => {
   selectHistoryFrame(Number(event.currentTarget.value));
 });
 document.getElementById("liveButton").addEventListener("click", selectLiveTimeline);
+async function testHailRiskAgent(button) {
+  const trackId = button.dataset.trackId;
+  if (!trackId || button.disabled) return;
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Testing…";
+  console.info(`[Hail detector] Starting test-only hail-risk research for ${trackId}.`);
+  try {
+    const response = await fetch(`/hail-risk/test/${encodeURIComponent(trackId)}`, { method: "POST" });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error(`[Hail detector] Raw hail-risk test diagnostic for ${trackId}:`, result);
+      const detail = result.detail;
+      const message = typeof detail === "string" ? detail : detail?.message;
+      throw new Error(message || `hail-risk test returned ${response.status}`);
+    }
+    console.log(`[Hail detector] Hail-risk agent test result for ${trackId}:`, result);
+    button.textContent = "Result logged ✓";
+    window.setTimeout(() => { button.textContent = originalLabel; }, 2_500);
+  } catch (error) {
+    console.error(`[Hail detector] Hail-risk agent test failed for ${trackId}:`, error);
+    button.textContent = "Test failed";
+    window.setTimeout(() => { button.textContent = originalLabel; }, 2_500);
+  } finally {
+    button.disabled = false;
+  }
+}
 document.getElementById("trackList").addEventListener("click", (event) => {
+  const testButton = event.target.closest(".track-test-button");
+  if (testButton) {
+    event.stopPropagation();
+    void testHailRiskAgent(testButton);
+    return;
+  }
   const card = event.target.closest(".track-card[data-track-id]");
   if (card) focusMapOnTrack(card.dataset.trackId);
 });
 document.getElementById("trackList").addEventListener("keydown", (event) => {
+  if (event.target.closest(".track-test-button")) return;
   if (event.key !== "Enter" && event.key !== " ") return;
   const card = event.target.closest(".track-card[data-track-id]");
   if (!card) return;

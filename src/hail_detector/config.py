@@ -34,6 +34,13 @@ def _positive_float(name: str, default: float) -> float:
     return value
 
 
+def _bounded_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    value = int(os.getenv(name, str(default)))
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
 def _boolean(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -114,6 +121,44 @@ class TelegramSettings:
 
 
 @dataclass(frozen=True)
+class HailRiskAgentSettings:
+    """Configuration for optional web-researched hail-risk assessments."""
+
+    enabled: bool = False
+    api_key: str | None = None
+    model: str = "gpt-5.6-sol"
+    reasoning_effort: str = "high"
+    candidate_minimum_dbz: int = 55
+    maximum_lead_minutes: int = 30
+    alert_threshold: int = 7
+    research_cooldown: timedelta = timedelta(minutes=30)
+    request_timeout_seconds: float = 90.0
+    max_output_tokens: int = 6000
+
+    def __post_init__(self) -> None:
+        if self.enabled and not self.api_key:
+            raise ValueError("OPENAI_API_KEY is required when HAIL_LLM_ENABLED is true")
+        if not self.model.strip():
+            raise ValueError("HAIL_LLM_MODEL must not be empty")
+        if self.reasoning_effort not in {"none", "low", "medium", "high", "xhigh", "max"}:
+            raise ValueError(
+                "HAIL_LLM_REASONING_EFFORT must be none, low, medium, high, xhigh, or max"
+            )
+        if self.candidate_minimum_dbz <= 0:
+            raise ValueError("HAIL_LLM_CANDIDATE_MINIMUM_DBZ must be positive")
+        if self.maximum_lead_minutes <= 0:
+            raise ValueError("HAIL_LLM_MAXIMUM_LEAD_MINUTES must be positive")
+        if not 0 <= self.alert_threshold <= 10:
+            raise ValueError("HAIL_LLM_ALERT_THRESHOLD must be between 0 and 10")
+        if self.research_cooldown <= timedelta(0):
+            raise ValueError("HAIL_LLM_RESEARCH_COOLDOWN_MINUTES must be positive")
+        if self.request_timeout_seconds <= 0:
+            raise ValueError("HAIL_LLM_TIMEOUT_SECONDS must be positive")
+        if self.max_output_tokens <= 0:
+            raise ValueError("HAIL_LLM_MAX_OUTPUT_TOKENS must be positive")
+
+
+@dataclass(frozen=True)
 class Settings:
     """Runtime configuration for OPERA composite and Craiova volume ingestion."""
 
@@ -146,6 +191,7 @@ class Settings:
     opera_volume_maximum_frame_age: timedelta = timedelta(minutes=15)
     opera_volume_maximum_beam_height_metres: int = 20_000
     telegram: TelegramSettings = field(default_factory=TelegramSettings)
+    hail_risk_agent: HailRiskAgentSettings = field(default_factory=HailRiskAgentSettings)
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -246,5 +292,27 @@ class Settings:
                 maximum_event_age=timedelta(
                     minutes=_positive_int("HAIL_TELEGRAM_MAX_EVENT_AGE_MINUTES", 10)
                 ),
+            ),
+            hail_risk_agent=HailRiskAgentSettings(
+                enabled=_boolean("HAIL_LLM_ENABLED", False),
+                api_key=os.getenv("OPENAI_API_KEY"),
+                model=os.getenv("HAIL_LLM_MODEL", "gpt-5.6-sol"),
+                reasoning_effort=os.getenv("HAIL_LLM_REASONING_EFFORT", "high")
+                .strip()
+                .lower(),
+                candidate_minimum_dbz=_positive_int(
+                    "HAIL_LLM_CANDIDATE_MINIMUM_DBZ", 55
+                ),
+                maximum_lead_minutes=_positive_int(
+                    "HAIL_LLM_MAXIMUM_LEAD_MINUTES", 30
+                ),
+                alert_threshold=_bounded_int(
+                    "HAIL_LLM_ALERT_THRESHOLD", 7, minimum=0, maximum=10
+                ),
+                research_cooldown=timedelta(
+                    minutes=_positive_int("HAIL_LLM_RESEARCH_COOLDOWN_MINUTES", 30)
+                ),
+                request_timeout_seconds=_positive_float("HAIL_LLM_TIMEOUT_SECONDS", 90.0),
+                max_output_tokens=_positive_int("HAIL_LLM_MAX_OUTPUT_TOKENS", 6000),
             ),
         )

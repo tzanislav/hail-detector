@@ -26,7 +26,13 @@ from .geospatial import (
     _inverse_mercator_y,
     _mercator_y,
 )
-from .hail_policy import HailAssessment, assess_track
+from .hail_policy import (
+    HailAssessment,
+    apply_llm_hail_risk,
+    assess_track,
+    suppress_for_unavailable_llm_research,
+)
+from .hail_risk_agent import HailRiskAgent, HailRiskResearchError
 from .models import RadarFrame
 from .storm_cells import DbzBand, PixelBounds, StormCell
 from .telegram import TelegramDeliveryResult, TelegramNotifier
@@ -79,6 +85,11 @@ class OperaPollResult:
     telegram_deliveries: int = 0
     telegram_delivery_failures: int = 0
     telegram_delivery_skipped_stale: int = 0
+    llm_research_candidates: int = 0
+    llm_research_requests: int = 0
+    llm_research_successes: int = 0
+    llm_research_failures: int = 0
+    llm_research_cooldown_skips: int = 0
     alert_processing_deferred: bool = True
     analysis_errors: tuple[str, ...] = ()
     error: str | None = None
@@ -119,6 +130,11 @@ class OperaPollResult:
             "telegram_deliveries": self.telegram_deliveries,
             "telegram_delivery_failures": self.telegram_delivery_failures,
             "telegram_delivery_skipped_stale": self.telegram_delivery_skipped_stale,
+            "llm_research_candidates": self.llm_research_candidates,
+            "llm_research_requests": self.llm_research_requests,
+            "llm_research_successes": self.llm_research_successes,
+            "llm_research_failures": self.llm_research_failures,
+            "llm_research_cooldown_skips": self.llm_research_cooldown_skips,
             "alert_processing_deferred": self.alert_processing_deferred,
             "analysis_errors": list(self.analysis_errors),
             "error": self.error,
@@ -788,6 +804,7 @@ class OperaIngestionService:
         analysis: OperaAnalysisPipeline | None = None,
         alert_lifecycle: AlertLifecycle | None = None,
         telegram_notifier: TelegramNotifier | None = None,
+        hail_risk_agent: HailRiskAgent | None = None,
     ):
         self.settings = settings
         self.archive = archive
@@ -797,6 +814,143 @@ class OperaIngestionService:
             archive, settings.alert_lifecycle.expiry
         )
         self.telegram_notifier = telegram_notifier
+        self.hail_risk_agent = hail_risk_agent
+
+    def _volume_profile_for(self, track_id: str) -> dict[str, Any] | None:
+        """Return the optional experimental profile for this exact primary track."""
+
+        volume_status = self.archive.read_opera_volume_status()
+        if not isinstance(volume_status, dict):
+            return None
+        profiles = volume_status.get("track_profiles")
+        if not isinstance(profiles, list):
+            return None
+        for profile in profiles:
+            if isinstance(profile, dict) and profile.get("track_id") == track_id:
+                return profile
+        return None
+
+    def _research_assessments(
+        self,
+        assessments: tuple[HailAssessment, ...],
+        *,
+        fetched_at: datetime,
+    ) -> tuple[tuple[HailAssessment, ...], int, int, int, int, int, tuple[str, ...]]:
+        """Apply the optional LLM gate and persist a per-track request cooldown."""
+
+        if self.hail_risk_agent is None:
+            return assessments, 0, 0, 0, 0, 0, ()
+
+        updated: list[HailAssessment] = []
+        candidates = requests = successes = failures = cooldown_skips = 0
+        errors: list[str] = []
+        for assessment in assessments:
+            value = assessment.as_dict()
+            if not self.hail_risk_agent.is_candidate(value):
+                if assessment.candidate_level is not None:
+                    updated.append(
+                        suppress_for_unavailable_llm_research(
+                            assessment,
+                            "the track does not meet the configured web-research request criteria",
+                        )
+                    )
+                else:
+                    updated.append(assessment)
+                continue
+            candidates += 1
+            previous = self.archive.read_hail_risk_research_record(assessment.track_id)
+            requested_at = previous.get("requested_at") if previous else None
+            previous_request_at: datetime | None = None
+            if isinstance(requested_at, str):
+                try:
+                    previous_request_at = datetime.fromisoformat(requested_at.replace("Z", "+00:00"))
+                    if previous_request_at.tzinfo is None:
+                        previous_request_at = previous_request_at.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    previous_request_at = None
+            if (
+                previous_request_at is not None
+                and fetched_at - previous_request_at < self.settings.hail_risk_agent.research_cooldown
+            ):
+                cooldown_skips += 1
+                cached_research = previous.get("research") if previous else None
+                if isinstance(cached_research, dict):
+                    try:
+                        updated.append(
+                            apply_llm_hail_risk(
+                                assessment,
+                                cached_research,
+                                alert_threshold=self.settings.hail_risk_agent.alert_threshold,
+                            )
+                        )
+                    except ValueError as error:
+                        errors.append(f"{assessment.track_id}: cached web research is invalid: {error}")
+                        updated.append(
+                            suppress_for_unavailable_llm_research(
+                                assessment,
+                                "the previous web-research result is invalid and its cooldown is active",
+                            )
+                        )
+                else:
+                    updated.append(
+                        suppress_for_unavailable_llm_research(
+                            assessment,
+                            "a previous web-research request did not produce a usable result and its cooldown is active",
+                        )
+                    )
+                continue
+
+            attempt: dict[str, Any] = {"requested_at": fetched_at.isoformat()}
+            try:
+                # Record this before invoking OpenAI. A timeout can still mean the
+                # request reached the API, so it must begin the cooldown as well.
+                self.archive.write_hail_risk_research_record(assessment.track_id, attempt)
+            except (OSError, TypeError, ValueError) as error:
+                errors.append(
+                    f"{assessment.track_id}: could not persist web-research cooldown: {error}"
+                )
+                updated.append(suppress_for_unavailable_llm_research(assessment, str(error)))
+                failures += 1
+                continue
+            requests += 1
+            try:
+                research = self.hail_risk_agent.assess(
+                    value,
+                    target=self.settings.target,
+                    volume_profile=self._volume_profile_for(assessment.track_id),
+                    now=fetched_at,
+                )
+                self.archive.write_hail_risk_research_record(
+                    assessment.track_id,
+                    attempt | {"research": research.as_dict()},
+                )
+                updated.append(
+                    apply_llm_hail_risk(
+                        assessment,
+                        research.as_dict(),
+                        alert_threshold=self.settings.hail_risk_agent.alert_threshold,
+                    )
+                )
+                successes += 1
+            except (HailRiskResearchError, ValueError) as error:
+                # An enabled research gate must not fall back to the earlier
+                # reflectivity-only candidate; that would bypass its threshold.
+                errors.append(f"{assessment.track_id}: {error}")
+                self.archive.write_hail_risk_research_record(
+                    assessment.track_id,
+                    attempt | {"error": str(error)},
+                )
+                updated.append(suppress_for_unavailable_llm_research(assessment, str(error)))
+                failures += 1
+        return (
+            tuple(updated),
+            candidates,
+            requests,
+            successes,
+            failures,
+            cooldown_skips,
+            tuple(errors),
+        )
 
     def _write_error(self, fetched_at: datetime, error: Exception) -> OperaPollResult:
         self.archive.prune_frames_older_than(fetched_at - self.settings.frame_retention)
@@ -860,14 +1014,33 @@ class OperaIngestionService:
             and not frame_errors
             and not analysis_result.errors
         )
+        assessments = analysis_result.assessments
+        research_candidates = research_requests = research_successes = research_failures = 0
+        research_cooldown_skips = 0
+        research_errors: tuple[str, ...] = ()
+        if alert_data_is_fresh:
+            (
+                assessments,
+                research_candidates,
+                research_requests,
+                research_successes,
+                research_failures,
+                research_cooldown_skips,
+                research_errors,
+            ) = self._research_assessments(assessments, fetched_at=fetched_at)
+        alert_processing_data_is_fresh = alert_data_is_fresh and research_failures == 0
+        self.archive.write_assessments(
+            [assessment.as_dict() for assessment in assessments],
+            self.settings.target.as_dict(),
+        )
         alert_result = self.alert_lifecycle.reconcile(
-            [assessment.as_dict() for assessment in analysis_result.assessments],
+            [assessment.as_dict() for assessment in assessments],
             evaluated_at=fetched_at,
-            data_is_fresh=alert_data_is_fresh,
+            data_is_fresh=alert_processing_data_is_fresh,
         )
         delivery_result = (
             self.telegram_notifier.deliver_pending(self.archive, now=fetched_at)
-            if self.telegram_notifier is not None and alert_data_is_fresh
+            if self.telegram_notifier is not None and alert_processing_data_is_fresh
             else TelegramDeliveryResult()
         )
         self.archive.prune_frames_older_than(fetched_at - self.settings.frame_retention)
@@ -899,10 +1072,7 @@ class OperaIngestionService:
             forecasted_tracks=analysis_result.forecasted_tracks,
             intersecting_target_tracks=analysis_result.intersecting_target_tracks,
             earliest_intersection_at=analysis_result.earliest_intersection_at,
-            severe_alert_candidates=sum(
-                assessment.candidate_level is not None
-                for assessment in analysis_result.assessments
-            ),
+            severe_alert_candidates=sum(assessment.candidate_level is not None for assessment in assessments),
             active_alerts=alert_result.active_alerts,
             alert_transitions=len(alert_result.transitions),
             notification_outbox_events=alert_result.outbox_events,
@@ -910,8 +1080,13 @@ class OperaIngestionService:
             telegram_deliveries=delivery_result.delivered,
             telegram_delivery_failures=delivery_result.failed,
             telegram_delivery_skipped_stale=delivery_result.skipped_stale,
+            llm_research_candidates=research_candidates,
+            llm_research_requests=research_requests,
+            llm_research_successes=research_successes,
+            llm_research_failures=research_failures,
+            llm_research_cooldown_skips=research_cooldown_skips,
             alert_processing_deferred=alert_result.deferred_for_stale_data,
-            analysis_errors=analysis_result.errors,
+            analysis_errors=(*analysis_result.errors, *research_errors),
             error=error,
         )
         self.archive.write_opera_status(result.as_dict())

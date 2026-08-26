@@ -7,9 +7,11 @@ from pathlib import Path
 
 import httpx
 
+import hail_detector.api as api_module
 from hail_detector.api import create_app
 from hail_detector.archive import ArchiveStore
-from hail_detector.config import Settings, TelegramSettings
+from hail_detector.config import HailRiskAgentSettings, Settings, TelegramSettings
+from hail_detector.hail_risk_agent import HailRiskResearch
 from hail_detector.models import RadarFrame
 
 
@@ -167,3 +169,71 @@ def test_dashboard_and_opera_archive_endpoints_are_available(tmp_path: Path) -> 
             "display_timestamp": frame.display_timestamp,
         }
     ]
+
+
+def test_manual_hail_risk_test_simulates_eligibility_without_creating_alerts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    received: list[dict[str, object]] = []
+
+    class TestAgent:
+        def __init__(self, _settings) -> None:
+            pass
+
+        def assess(self, candidate, **_kwargs) -> HailRiskResearch:
+            received.append(candidate)
+            return HailRiskResearch(
+                rating=8,
+                description="Test-only researched hail-risk assessment.",
+                sources=(),
+                model="gpt-5.6-sol",
+                response_id="resp_test",
+                researched_at=datetime(2026, 8, 26, 12, tzinfo=timezone.utc),
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(api_module, "HailRiskAgent", TestAgent)
+    settings = replace(
+        _settings(tmp_path),
+        hail_risk_agent=HailRiskAgentSettings(enabled=True, api_key="test-key"),
+    )
+    archive = ArchiveStore(tmp_path)
+    archive.write_opera_tracker_state(
+        {
+            "minimum_confirmed_observations": 2,
+            "tracks": [
+                {
+                    "track_id": "track-000001",
+                    "motion_confidence": "medium",
+                    "points": [
+                        {
+                            "observed_at": "2026-08-26T11:55:00+00:00",
+                            "centroid_location": {"latitude": 42.5, "longitude": 23.0},
+                            "max_dbz_lower": 40,
+                            "max_dbz_upper": 45,
+                        },
+                        {
+                            "observed_at": "2026-08-26T12:00:00+00:00",
+                            "centroid_location": {"latitude": 42.6, "longitude": 23.1},
+                            "max_dbz_lower": 45,
+                            "max_dbz_upper": 50,
+                        },
+                    ],
+                }
+            ],
+            "forecasts": [],
+        }
+    )
+
+    response = asyncio.run(_post(create_app(settings), "/hail-risk/test/track-000001"))
+
+    assert response.status_code == 200
+    assert response.json()["test_mode"] is True
+    assert response.json()["hail_risk_assessment"]["rating"] == 8
+    assert received[0]["projected_target_intersection"] is True
+    assert received[0]["max_dbz_band"] == [55, 60]
+    assert received[0]["storm_context"]["test_mode"] is True
+    assert archive.read_alert_state() is None
+    assert archive.read_pending_notification_events() == []
