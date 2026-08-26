@@ -753,6 +753,7 @@ class OperaIngestionService:
         self.analysis = analysis or OperaAnalysisPipeline(settings, archive)
 
     def _write_error(self, fetched_at: datetime, error: Exception) -> OperaPollResult:
+        self.archive.prune_frames_older_than(fetched_at - self.settings.frame_retention)
         result = OperaPollResult(
             state="error",
             fetched_at=fetched_at,
@@ -805,6 +806,7 @@ class OperaIngestionService:
         latest_is_archived = latest_frame is not None and self.archive.has_opera_raw_frame(latest_frame)
         latest_has_overlay = latest_frame is not None and self.archive.has_opera_overlay(latest_frame)
         analysis_result = self.analysis.process(frames)
+        self.archive.prune_frames_older_than(fetched_at - self.settings.frame_retention)
         if not frames:
             state, error = "error", "OPERA response contains no DBZH composite links"
         elif not latest_is_archived or not latest_has_overlay:

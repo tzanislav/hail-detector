@@ -8,6 +8,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from .archive import ArchiveStore
 from .config import Settings
 from .opera import OperaClient, OperaIngestionService
+from .opera_volume import OperaVolumeClient, OperaVolumeIngestionService
 from .service import IngestionService
 from .yarlovo import YarlovoClient
 
@@ -32,6 +33,26 @@ def main() -> None:
             if opera_client is not None
             else None
         )
+        opera_volume_client = (
+            OperaVolumeClient(settings.opera_volume_api_url, settings.opera_volume_lookback)
+            if settings.opera_volume_enabled
+            else None
+        )
+        opera_volume_service = (
+            OperaVolumeIngestionService(settings, archive, opera_volume_client)
+            if opera_volume_client is not None
+            else None
+        )
+
+        def poll_opera_sources() -> None:
+            # A volume profile is sampled against the latest primary tracks, so
+            # keep these two OPERA polls ordered rather than running them in
+            # independent scheduler jobs.
+            if opera_service is not None:
+                opera_service.poll_once()
+            if opera_volume_service is not None:
+                opera_volume_service.poll_once()
+
         scheduler = BlockingScheduler(timezone=timezone.utc)
         scheduler.add_job(
             service.poll_once,
@@ -42,9 +63,9 @@ def main() -> None:
             coalesce=True,
             misfire_grace_time=settings.poll_interval_seconds,
         )
-        if opera_service is not None:
+        if opera_service is not None or opera_volume_service is not None:
             scheduler.add_job(
-                opera_service.poll_once,
+                poll_opera_sources,
                 trigger="interval",
                 seconds=settings.poll_interval_seconds,
                 id="opera-poll",
@@ -53,15 +74,14 @@ def main() -> None:
                 misfire_grace_time=settings.poll_interval_seconds,
             )
         try:
-            # Keep primary decision-source polling first. OPERA is a secondary
-            # comparison feed and must not delay its CAPPI archive.
+            poll_opera_sources()
             service.poll_once()
-            if opera_service is not None:
-                opera_service.poll_once()
             scheduler.start()
         finally:
             if opera_client is not None:
                 opera_client.close()
+            if opera_volume_client is not None:
+                opera_volume_client.close()
 
 
 if __name__ == "__main__":

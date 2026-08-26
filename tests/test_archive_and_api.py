@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -55,6 +55,60 @@ def test_archive_rejects_mutated_content_for_the_same_source_filename(tmp_path: 
     assert archived.already_present is False
     assert same.already_present is True
     assert store.raw_path(frame).read_bytes() == b"first"
+
+
+def test_frame_retention_removes_expired_frames_and_per_frame_outputs(tmp_path: Path) -> None:
+    store = ArchiveStore(tmp_path)
+    cutoff = datetime(2026, 8, 26, 12, tzinfo=timezone.utc)
+
+    def frame(filename: str, observed_at: datetime) -> RadarFrame:
+        return RadarFrame(
+            filename=filename,
+            url=f"https://example.test/{filename}",
+            observed_at=observed_at,
+            display_timestamp=observed_at.isoformat(),
+        )
+
+    expired = cutoff - timedelta(seconds=1)
+    retained = cutoff
+    old_yarlovo = frame("old-yarlovo.png", expired)
+    new_yarlovo = frame("new-yarlovo.png", retained)
+    for item in (old_yarlovo, new_yarlovo):
+        store.archive_frame(item, b"png", cutoff)
+        store.write_calibration(item, {"width": 720})
+        store.write_cells(item, [])
+
+    old_opera = frame("old-opera.h5", expired)
+    new_opera = frame("new-opera.h5", retained)
+    for item in (old_opera, new_opera):
+        store.archive_opera_frame(item, b"hdf5", cutoff)
+        store.archive_opera_overlay(item, b"overlay", {"quantity": "DBZH"})
+        store.write_opera_cells(item, [])
+
+    old_volume = frame("old-volume.h5", expired)
+    new_volume = frame("new-volume.h5", retained)
+    for item in (old_volume, new_volume):
+        store.archive_opera_volume_frame(item, b"volume", cutoff)
+
+    store.prune_frames_older_than(cutoff)
+
+    assert not store.raw_path(old_yarlovo).exists()
+    assert not (store.metadata_dir / f"{old_yarlovo.filename}.json").exists()
+    assert not (store.calibration_dir / f"{old_yarlovo.filename}.json").exists()
+    assert not (store.cells_dir / f"{old_yarlovo.filename}.json").exists()
+    assert store.raw_path(new_yarlovo).is_file()
+
+    assert not store.opera_raw_path(old_opera).exists()
+    assert not (store.opera_metadata_dir / f"{old_opera.filename}.json").exists()
+    assert not store.opera_overlay_path(old_opera).exists()
+    assert not (store.opera_overlays_dir / f"{old_opera.filename}.json").exists()
+    assert not (store.opera_cells_dir / f"{old_opera.filename}.json").exists()
+    assert store.opera_raw_path(new_opera).is_file()
+    assert store.opera_overlay_path(new_opera).is_file()
+
+    assert not store.opera_volume_raw_path(old_volume).exists()
+    assert not (store.opera_volume_metadata_dir / f"{old_volume.filename}.json").exists()
+    assert store.opera_volume_raw_path(new_volume).is_file()
 
 
 def test_health_is_unavailable_until_a_fresh_poll_exists(tmp_path: Path) -> None:
@@ -120,6 +174,7 @@ def test_dashboard_and_archived_frame_endpoints_are_available(tmp_path: Path) ->
     cells_response = asyncio.run(_get(app, f"/cells/{frame.filename}"))
     opera_response = asyncio.run(_get(app, f"/opera/overlay/{opera_frame.filename}"))
     history_response = asyncio.run(_get(app, "/opera/history"))
+    volume_status_response = asyncio.run(_get(app, "/opera/volume/status"))
 
     assert dashboard.status_code == 200
     assert "Hail detector" in dashboard.text
@@ -136,3 +191,5 @@ def test_dashboard_and_archived_frame_endpoints_are_available(tmp_path: Path) ->
             "display_timestamp": opera_frame.display_timestamp,
         }
     ]
+    assert volume_status_response.status_code == 200
+    assert volume_status_response.json()["experimental"] is True

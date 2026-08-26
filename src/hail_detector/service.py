@@ -103,6 +103,9 @@ class IngestionService:
         )
 
     def _write_error(self, fetched_at: datetime, error: Exception) -> PollResult:
+        self.archive.prune_frames_older_than(
+            fetched_at - self.settings.frame_retention
+        )
         result = PollResult(
             state="error",
             fetched_at=fetched_at,
@@ -207,6 +210,9 @@ class IngestionService:
                 outbox_events=0,
                 deferred_for_stale_data=True,
             )
+        self.archive.prune_frames_older_than(
+            snapshot.fetched_at - self.settings.frame_retention
+        )
         if not frames:
             state = "error"
             error = "manifest contains no valid CAPPI frames"

@@ -12,6 +12,12 @@ DEFAULT_OPERA_API_URL = (
     "https://api.meteogate.eu/eu-eumetnet-weather-radar/collections/"
     "observations/locations/0-20010-0-OPERA"
 )
+DEFAULT_OPERA_VOLUME_RADAR_ID = "0-642-0-rocra"
+DEFAULT_OPERA_VOLUME_RADAR_NAME = "Craiova, Romania"
+DEFAULT_OPERA_VOLUME_API_URL = (
+    "https://api.meteogate.eu/eu-eumetnet-weather-radar/collections/"
+    f"observations/locations/{DEFAULT_OPERA_VOLUME_RADAR_ID}"
+)
 
 
 def _positive_int(name: str, default: int) -> int:
@@ -106,6 +112,7 @@ class Settings:
     segmentation_minimum_pixels: int
     tracker_maximum_gap: timedelta
     tracker_maximum_speed_kmh: int
+    frame_retention: timedelta = timedelta(hours=24)
     tracker_motion_window_observations: int = 5
     target: TargetLocation = field(default_factory=TargetLocation)
     forecast_horizon: timedelta = timedelta(minutes=120)
@@ -122,6 +129,13 @@ class Settings:
     opera_storm_minimum_45dbz_core_square_km: float = 8.0
     opera_storm_minimum_55dbz_core_square_km: float = 1.0
     opera_track_minimum_confirmations: int = 2
+    opera_volume_enabled: bool = True
+    opera_volume_api_url: str = DEFAULT_OPERA_VOLUME_API_URL
+    opera_volume_radar_id: str = DEFAULT_OPERA_VOLUME_RADAR_ID
+    opera_volume_radar_name: str = DEFAULT_OPERA_VOLUME_RADAR_NAME
+    opera_volume_lookback: timedelta = timedelta(minutes=15)
+    opera_volume_maximum_frame_age: timedelta = timedelta(minutes=15)
+    opera_volume_maximum_beam_height_metres: int = 20_000
     yarlovo_analysis_enabled: bool = False
 
     @classmethod
@@ -143,6 +157,9 @@ class Settings:
             ),
             tracker_maximum_speed_kmh=_positive_int(
                 "HAIL_TRACKER_MAXIMUM_SPEED_KMH", 160
+            ),
+            frame_retention=timedelta(
+                hours=_positive_int("HAIL_FRAME_RETENTION_HOURS", 24)
             ),
             tracker_motion_window_observations=_positive_int(
                 "HAIL_TRACKER_MOTION_WINDOW_OBSERVATIONS", 5
@@ -206,6 +223,25 @@ class Settings:
             ),
             opera_track_minimum_confirmations=_positive_int(
                 "HAIL_OPERA_TRACK_MINIMUM_CONFIRMATIONS", 2
+            ),
+            opera_volume_enabled=_boolean("HAIL_OPERA_VOLUME_ENABLED", True),
+            opera_volume_api_url=os.getenv(
+                "HAIL_OPERA_VOLUME_API_URL", DEFAULT_OPERA_VOLUME_API_URL
+            ),
+            opera_volume_radar_id=os.getenv(
+                "HAIL_OPERA_VOLUME_RADAR_ID", DEFAULT_OPERA_VOLUME_RADAR_ID
+            ),
+            opera_volume_radar_name=os.getenv(
+                "HAIL_OPERA_VOLUME_RADAR_NAME", DEFAULT_OPERA_VOLUME_RADAR_NAME
+            ),
+            opera_volume_lookback=timedelta(
+                minutes=_positive_int("HAIL_OPERA_VOLUME_LOOKBACK_MINUTES", 15)
+            ),
+            opera_volume_maximum_frame_age=timedelta(
+                minutes=_positive_int("HAIL_OPERA_VOLUME_MAX_FRAME_AGE_MINUTES", 15)
+            ),
+            opera_volume_maximum_beam_height_metres=_positive_int(
+                "HAIL_OPERA_VOLUME_MAX_BEAM_HEIGHT_METRES", 20_000
             ),
             yarlovo_analysis_enabled=_boolean("HAIL_YARLOVO_ANALYSIS_ENABLED", False),
         )

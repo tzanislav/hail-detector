@@ -24,7 +24,7 @@ class ArchivedFrame:
 
 
 class ArchiveStore:
-    """Append-only raw frame archive with atomic metadata/status writes."""
+    """Frame archive with atomic metadata/status writes and bounded history."""
 
     def __init__(self, root: Path):
         self.root = root
@@ -47,6 +47,10 @@ class ArchiveStore:
         self.opera_status_dir = self.opera_dir / "status"
         self.opera_cells_dir = self.opera_dir / "cells"
         self.opera_tracks_dir = self.opera_dir / "tracks"
+        self.opera_volume_dir = self.opera_dir / "volume"
+        self.opera_volume_frames_dir = self.opera_volume_dir / "frames"
+        self.opera_volume_metadata_dir = self.opera_volume_dir / "metadata"
+        self.opera_volume_status_dir = self.opera_volume_dir / "status"
 
     @staticmethod
     def _atomic_write(path: Path, content: bytes) -> None:
@@ -109,6 +113,86 @@ class ArchiveStore:
         )
         return ArchivedFrame(path=path, sha256=digest, already_present=already_present)
 
+    @staticmethod
+    def _frame_observed_at(raw_path: Path, metadata_path: Path) -> datetime:
+        """Read the source observation time, falling back to the file timestamp."""
+
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            source_timestamp = metadata["source_timestamp"]
+            if not isinstance(source_timestamp, str):
+                raise ValueError("source_timestamp must be a string")
+            observed_at = datetime.fromisoformat(source_timestamp.replace("Z", "+00:00"))
+            return (
+                observed_at
+                if observed_at.tzinfo is not None
+                else observed_at.replace(tzinfo=timezone.utc)
+            )
+        except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return datetime.fromtimestamp(raw_path.stat().st_mtime, tz=timezone.utc)
+
+    def _prune_source_frames_older_than(
+        self,
+        cutoff: datetime,
+        *,
+        raw_dir: Path,
+        metadata_dir: Path,
+        frame_artifacts: tuple[tuple[Path, str], ...] = (),
+    ) -> None:
+        if not raw_dir.is_dir():
+            return
+
+        for raw_path in raw_dir.iterdir():
+            if not raw_path.is_file():
+                continue
+            metadata_path = metadata_dir / f"{raw_path.name}.json"
+            try:
+                observed_at = self._frame_observed_at(raw_path, metadata_path)
+            except FileNotFoundError:
+                # A second poller may have removed this frame between listing
+                # the directory and inspecting it. The next pass will handle
+                # any remaining files.
+                continue
+            if observed_at >= cutoff:
+                continue
+
+            raw_path.unlink(missing_ok=True)
+            metadata_path.unlink(missing_ok=True)
+            for directory, suffix in frame_artifacts:
+                (directory / f"{raw_path.name}{suffix}").unlink(missing_ok=True)
+
+    def prune_frames_older_than(self, cutoff: datetime) -> None:
+        """Remove expired raw frames and their per-frame outputs.
+
+        Persistent status and track files deliberately remain: their historic
+        points continue to be useful even after their raw source frame expires.
+        """
+
+        if cutoff.tzinfo is None:
+            raise ValueError("cutoff must be timezone-aware")
+
+        self._prune_source_frames_older_than(
+            cutoff,
+            raw_dir=self.frames_dir,
+            metadata_dir=self.metadata_dir,
+            frame_artifacts=((self.calibration_dir, ".json"), (self.cells_dir, ".json")),
+        )
+        self._prune_source_frames_older_than(
+            cutoff,
+            raw_dir=self.opera_frames_dir,
+            metadata_dir=self.opera_metadata_dir,
+            frame_artifacts=(
+                (self.opera_overlays_dir, ".png"),
+                (self.opera_overlays_dir, ".json"),
+                (self.opera_cells_dir, ".json"),
+            ),
+        )
+        self._prune_source_frames_older_than(
+            cutoff,
+            raw_dir=self.opera_volume_frames_dir,
+            metadata_dir=self.opera_volume_metadata_dir,
+        )
+
     def archive_frame(self, frame: RadarFrame, content: bytes, fetched_at: datetime) -> ArchivedFrame:
         return self._archive_frame(
             frame,
@@ -141,6 +225,24 @@ class ArchiveStore:
             raw_dir=self.opera_frames_dir,
             metadata_dir=self.opera_metadata_dir,
             source="eumetnet_opera_dbzh_maximum_reflectivity",
+        )
+
+    def opera_volume_raw_path(self, frame: RadarFrame) -> Path:
+        return self.opera_volume_frames_dir / frame.filename
+
+    def has_opera_volume_raw_frame(self, frame: RadarFrame) -> bool:
+        return self.opera_volume_raw_path(frame).is_file()
+
+    def archive_opera_volume_frame(
+        self, frame: RadarFrame, content: bytes, fetched_at: datetime
+    ) -> ArchivedFrame:
+        return self._archive_frame(
+            frame,
+            content,
+            fetched_at,
+            raw_dir=self.opera_volume_frames_dir,
+            metadata_dir=self.opera_volume_metadata_dir,
+            source="eumetnet_opera_experimental_volume_dbzh",
         )
 
     def opera_overlay_path(self, frame: RadarFrame) -> Path:
@@ -301,6 +403,17 @@ class ArchiveStore:
 
     def read_opera_status(self) -> dict[str, Any] | None:
         path = self.opera_status_dir / "latest.json"
+        if not path.is_file():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def write_opera_volume_status(self, status: dict[str, Any]) -> None:
+        self._atomic_write(
+            self.opera_volume_status_dir / "latest.json", self._json_bytes(status)
+        )
+
+    def read_opera_volume_status(self) -> dict[str, Any] | None:
+        path = self.opera_volume_status_dir / "latest.json"
         if not path.is_file():
             return None
         return json.loads(path.read_text(encoding="utf-8"))

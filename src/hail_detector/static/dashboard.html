@@ -31,6 +31,7 @@
           <span><i class="legend track"></i> Smoothed storm track</span>
           <span><i class="legend history"></i> Prior-frame maximum dBZ</span>
           <span><i class="legend prediction"></i> Projection</span>
+          <span><i class="legend volume"></i> Experimental volume profile</span>
           <span><i class="legend target"></i> Target radius</span>
         </div>
         <div class="map-timeline" aria-label="OPERA frame history">
@@ -43,7 +44,10 @@
       <section class="track-section" aria-labelledby="trackHeading">
         <header class="section-heading">
           <p class="eyebrow">LIVE OBSERVATIONS</p>
-          <h1 id="trackHeading">Storm tracks</h1>
+          <div class="section-heading__title">
+            <h1 id="trackHeading">Storm tracks</h1>
+            <button id="guideButton" class="guide-button" type="button" aria-haspopup="dialog">Guide</button>
+          </div>
           <p>Observed OPERA maximum-reflectivity cells and their short-horizon projections.</p>
         </header>
         <div id="trackList" class="track-list"><p class="muted">Loading storm tracks...</p></div>
@@ -61,6 +65,7 @@
         <p id="staleNotice" class="notice hidden" aria-live="polite"></p>
         <div class="status-strip">
           <div class="status-item"><span>Primary radar age</span><strong id="radarAge">--</strong></div>
+          <div class="status-item"><span>Volume radar age</span><strong id="volumeAge">--</strong></div>
           <div class="status-item"><span>Yarlovo age</span><strong id="yarlovoAge">--</strong></div>
           <div class="status-item"><span>Tracked cells</span><strong id="trackCount">--</strong></div>
           <div class="status-item"><span>Target intersections</span><strong id="intersectionCount">--</strong></div>
@@ -70,6 +75,35 @@
         </div>
       </section>
     </main>
+
+    <dialog id="guideDialog" class="guide-dialog" aria-labelledby="guideTitle">
+      <header class="guide-dialog__header">
+        <div>
+          <p class="eyebrow">EXPERIMENTAL VOLUME DATA</p>
+          <h2 id="guideTitle">Reading the vertical radar sample</h2>
+        </div>
+        <form method="dialog"><button class="guide-dialog__close" type="submit" aria-label="Close guide">&times;</button></form>
+      </header>
+      <div class="guide-dialog__content">
+        <section>
+          <h3>What it shows</h3>
+          <p>The left scale is beam height in km MSL, not height above the ground. Each coloured mark is the strongest return in a small local 3 by 3 radar-gate sample at one scan angle.</p>
+        </section>
+        <section>
+          <h3>Colour key</h3>
+          <p><span class="guide-swatch guide-swatch--blue"></span>below 35 dBZ <span class="guide-swatch guide-swatch--green"></span>35&ndash;45 <span class="guide-swatch guide-swatch--yellow"></span>45&ndash;50 <span class="guide-swatch guide-swatch--orange"></span>50&ndash;55 <span class="guide-swatch guide-swatch--red"></span>55+.</p>
+        </section>
+        <section>
+          <h3>Hail clues</h3>
+          <p>High dBZ alone is not proof of hail. The useful comparison is how high a 50&ndash;60 dBZ core reaches relative to the 0&deg;C and &minus;20&deg;C temperature levels. A 50 dBZ core above &minus;20&deg;C, or a 60 dBZ core well above freezing, is more concerning than the same value low in the storm.</p>
+        </section>
+        <section class="guide-dialog__caution">
+          <h3>Important limitation</h3>
+          <p>This is a distant, experimental volume-radar sample. It has gaps between scan angles, cannot see the lowest part of the storm here, and does not distinguish hail from very heavy rain on its own. It does not affect tracking, forecasts, or alerts.</p>
+        </section>
+        <p class="guide-dialog__reference">Reference: <a href="https://www.weather.gov/ict/radarassisstance" target="_blank" rel="noreferrer">NWS radar hail guidance</a>.</p>
+      </div>
+    </dialog>
 
     <script
       src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"

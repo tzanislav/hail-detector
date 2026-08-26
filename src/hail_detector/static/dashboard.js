@@ -94,6 +94,10 @@ function dbzLabel(lower, upper) {
   return Number.isFinite(lower) && Number.isFinite(upper) ? `${lower}-${upper} dBZ` : "dBZ unavailable";
 }
 
+function maximumDbzLabel(upper) {
+  return Number.isFinite(upper) ? `${upper} dBZ` : "dBZ unavailable";
+}
+
 function currentDbzLabel(track) {
   const [lower, upper] = track.latest_max_dbz_band || [];
   return dbzLabel(lower, upper);
@@ -289,6 +293,12 @@ function renderStatus(status) {
   badge.textContent = state.toUpperCase();
   const operaFrame = status.latest_dbzh_composite || {};
   setText("radarAge", liveAgeLabel(operaFrame.observed_at, status.latest_age_seconds));
+  const volume = status.volume || {};
+  const volumeFrame = volume.latest_dbzh_volume || {};
+  setText(
+    "volumeAge",
+    volumeFrame.observed_at ? liveAgeLabel(volumeFrame.observed_at, volume.latest_age_seconds) : volume.state || "Waiting",
+  );
   const yarlovo = status.yarlovo || {};
   const yarlovoFrame = yarlovo.latest_cappi_frame || {};
   setText("yarlovoAge", liveAgeLabel(yarlovoFrame.observed_at, yarlovo.latest_age_seconds));
@@ -312,7 +322,92 @@ function assessmentIndex(assessments) {
   return new Map((assessments.assessments || []).map((item) => [item.track_id, item]));
 }
 
-function renderTracks(tracker, assessments) {
+function renderVolumeProfile(volume, trackId) {
+  const profile = (volume?.track_profiles || []).find((item) => item.track_id === trackId);
+  const source = volume?.radar?.name || "OPERA volume radar";
+  if (!profile) {
+    return `<p class="volume-profile muted">Experimental volume: ${escapeHtml(source)} has no profile for this track yet.</p>`;
+  }
+  const samples = (profile.profile || []).filter((sample) => Number.isFinite(sample.max_dbzh));
+  if (!samples.length) {
+    return `<p class="volume-profile muted">Experimental volume: no sampled reflectivity below the configured beam-height limit.</p>`;
+  }
+  const values = samples.map((sample) => {
+    const height = Number.isFinite(sample.beam_height_metres_msl)
+      ? (sample.beam_height_metres_msl / 1000).toFixed(1)
+      : "?";
+    return `${height} km: ${sample.max_dbzh.toFixed(0)} dBZ`;
+  }).join(" · ");
+  const distance = Number.isFinite(profile.distance_km) ? profile.distance_km.toFixed(0) : "unknown";
+  return `<div class="volume-profile"><p><strong>Experimental vertical profile</strong><span>${escapeHtml(source)} · ${escapeHtml(distance)} km away</span></p><p>${escapeHtml(values)}</p><small>Local 3 × 3 radar-gate maximum; not used in tracking or forecasts.</small></div>`;
+}
+
+const VOLUME_PROFILE_MAXIMUM_HEIGHT_KM = 20;
+
+function volumeColor(maxDbzh) {
+  if (maxDbzh >= 60) return "#c43e45";
+  if (maxDbzh >= 55) return "#d9682f";
+  if (maxDbzh >= 50) return "#e58e2d";
+  if (maxDbzh >= 45) return "#e8ad2d";
+  if (maxDbzh >= 40) return "#75ae63";
+  if (maxDbzh >= 35) return "#4c9c83";
+  return "#79aabf";
+}
+
+function renderVerticalProfile(volume, trackId) {
+  const profile = (volume?.track_profiles || []).find((item) => item.track_id === trackId);
+  const source = volume?.radar?.name || "OPERA volume radar";
+  const distance = Number.isFinite(profile?.distance_km) ? `${profile.distance_km.toFixed(0)} km away` : "distance unavailable";
+  const samples = (profile?.profile || []).map((sample) => ({
+    heightKm: Number(sample.beam_height_metres_msl) / 1000,
+    maxDbzh: Number(sample.max_dbzh),
+  })).filter((sample) => Number.isFinite(sample.heightKm) && Number.isFinite(sample.maxDbzh)
+    && sample.heightKm >= 0 && sample.heightKm <= VOLUME_PROFILE_MAXIMUM_HEIGHT_KM);
+  const caption = `<figcaption><span>Vertical radar sample</span><small>${escapeHtml(source)} · ${escapeHtml(distance)}</small></figcaption>`;
+  if (!samples.length) {
+    return `<figure class="vertical-profile vertical-profile--empty">${caption}<div class="vertical-profile__empty">No sampled volume data</div><small class="vertical-profile__note">Experimental remote-radar observation</small></figure>`;
+  }
+
+  const width = 104;
+  const height = 146;
+  const plot = { left: 25, right: 9, top: 12, bottom: 25 };
+  const plotHeight = height - plot.top - plot.bottom;
+  const yFor = (heightKm) => plot.top + (VOLUME_PROFILE_MAXIMUM_HEIGHT_KM - heightKm)
+    / VOLUME_PROFILE_MAXIMUM_HEIGHT_KM * plotHeight;
+  const grid = [];
+  for (let heightKm = 0; heightKm <= VOLUME_PROFILE_MAXIMUM_HEIGHT_KM; heightKm += 5) {
+    const y = yFor(heightKm);
+    grid.push(`<line x1="${plot.left}" y1="${y}" x2="${width - plot.right}" y2="${y}" stroke="#d6d4ce" stroke-width="0.8" stroke-dasharray="2 3" /><text x="${plot.left - 4}" y="${y + 3}" text-anchor="end" fill="#696762" font-size="8">${heightKm}</text>`);
+  }
+  const coreLeft = 53;
+  const bands = samples.map((sample) => {
+    const widthForValue = 13 + Math.min(1, Math.max(0, sample.maxDbzh / 70)) * 20;
+    const x = coreLeft - widthForValue / 2;
+    const y = yFor(sample.heightKm) - 3.5;
+    const label = `${sample.heightKm.toFixed(1)} km MSL: ${sample.maxDbzh.toFixed(0)} dBZ`;
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${widthForValue.toFixed(1)}" height="7" rx="2" fill="${volumeColor(sample.maxDbzh)}" stroke="#ffffff" stroke-width="0.9"><title>${escapeHtml(label)}</title></rect>`;
+  }).join("");
+  const label = `Experimental vertical radar sample from 0 to ${VOLUME_PROFILE_MAXIMUM_HEIGHT_KM} kilometres MSL`;
+  return `<figure class="vertical-profile">${caption}<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(label)}"><g>${grid.join("")}</g><line x1="${coreLeft}" y1="${plot.top}" x2="${coreLeft}" y2="${height - plot.bottom}" stroke="#bbb8b0" stroke-width="0.8" />${bands}<text x="${width - plot.right}" y="${height - 6}" text-anchor="end" fill="#696762" font-size="8">km MSL</text></svg><small class="vertical-profile__note">Local 3 by 3 gate maximum · experimental only</small></figure>`;
+}
+
+function volumeEchoTop(profile) {
+  const echoes = (profile?.profile || []).filter((sample) =>
+    Number.isFinite(sample.max_dbzh)
+    && sample.max_dbzh >= 35
+    && Number.isFinite(sample.beam_height_metres_msl));
+  return echoes.reduce(
+    (highest, sample) => (!highest || sample.beam_height_metres_msl > highest.beam_height_metres_msl ? sample : highest),
+    null,
+  );
+}
+
+function volumeEchoTopLabel(sample) {
+  if (!sample) return null;
+  return `Volume >=35 dBZ: ${(sample.beam_height_metres_msl / 1000).toFixed(1)} km MSL`;
+}
+
+function renderTracks(tracker, assessments, volume) {
   const index = assessmentIndex(assessments);
   const minimumConfirmations = tracker.minimum_confirmed_observations || 1;
   const tracks = (tracker.tracks || []).filter((track) =>
@@ -334,7 +429,7 @@ function renderTracks(tracker, assessments) {
     const projection = (forecast?.predicted_positions || []).map((position) => predictionLabel(position.lead_minutes)).join(", ") || "No motion projection";
     const reason = (assessment.reasons || []).slice(-1)[0] || "OPERA maximum reflectivity; hail assessment is disabled pending calibration.";
     const focused = focusedTrackId === track.track_id ? "is-focused" : "";
-    return `<article class="track-card ${style} ${focused}" data-track-id="${escapeHtml(track.track_id)}" tabindex="0" role="button" aria-label="Focus the map on this storm track"><h3>${escapeHtml(level)}</h3><p>Current reflectivity: ${escapeHtml(currentDbzLabel(track))}</p>${renderIntensityHistory(track)}<p>${escapeHtml(motion)}</p><p>Projection: ${escapeHtml(projection)}</p><p>${escapeHtml(arrival)}</p><p class="reason">${escapeHtml(reason)}</p></article>`;
+    return `<article class="track-card ${style} ${focused}" data-track-id="${escapeHtml(track.track_id)}" tabindex="0" role="button" aria-label="Focus the map on this storm track"><h3>${escapeHtml(level)}</h3><p>Current reflectivity: ${escapeHtml(currentDbzLabel(track))}</p><div class="observation-charts">${renderIntensityHistory(track)}${renderVerticalProfile(volume, track.track_id)}</div><p>${escapeHtml(motion)}</p><p>Projection: ${escapeHtml(projection)}</p><p>${escapeHtml(arrival)}</p><p class="reason">${escapeHtml(reason)}</p></article>`;
   }).join("");
 }
 
@@ -360,6 +455,26 @@ function drawMap(status, tracker, cells, { displayFrame = null, historical = fal
     L.circleMarker([location.latitude, location.longitude], { radius, color: "#a66e00", fillColor: "#e8ad2d", fillOpacity: 0.8, weight: 1 })
       .bindPopup(`${cell.max_band?.label || "Unknown"} dBZ · ${area}`).addTo(layers);
   }
+  const volumeProfiles = new Map(
+    !historical
+      ? (status.volume?.track_profiles || []).map((profile) => [profile.track_id, profile])
+      : [],
+  );
+  const volumeSource = !historical ? [...volumeProfiles.values()][0] : null;
+  const volumeRadarLocation = volumeSource?.radar_location;
+  if (Number.isFinite(volumeRadarLocation?.latitude) && Number.isFinite(volumeRadarLocation?.longitude)) {
+    const sourceName = escapeHtml(status.volume?.radar?.name || "OPERA volume radar");
+    L.circleMarker([volumeRadarLocation.latitude, volumeRadarLocation.longitude], {
+      radius: 5,
+      color: "#ffffff",
+      fillColor: "#245f8f",
+      fillOpacity: 1,
+      weight: 2,
+    })
+      .bindTooltip(`Experimental volume radar: ${sourceName}`, { direction: "top" })
+      .addTo(layers);
+  }
+
   const minimumConfirmations = tracker.minimum_confirmed_observations || 1;
   const cutoff = historical ? new Date(operaFrame?.observed_at || "").valueOf() : null;
   for (const track of tracker.tracks || []) {
@@ -375,15 +490,25 @@ function drawMap(status, tracker, cells, { displayFrame = null, historical = fal
     if (path.length > 1) L.polyline(path, { color: "#d9682f", weight: 3 }).addTo(layers);
     for (const point of visiblePoints.slice(0, -1)) {
       const location = [point.centroid_location.latitude, point.centroid_location.longitude];
-      const label = dbzLabel(point.max_dbz_lower, point.max_dbz_upper);
+      const label = maximumDbzLabel(Number(point.max_dbz_upper));
       L.circleMarker(location, { radius: 3.5, color: "#ffffff", fillColor: "#7d7a73", fillOpacity: 0.92, opacity: 0.95, weight: 1 })
         .bindTooltip(label, { permanent: true, direction: "top", className: "intensity-breadcrumb", offset: [0, -2] })
         .addTo(layers);
     }
     const latest = rawPoints.at(-1);
     const latestPoint = visiblePoints.at(-1);
+    const volumeTop = volumeEchoTop(volumeProfiles.get(track.track_id));
+    const volumeLabel = volumeEchoTopLabel(volumeTop);
+    if (volumeLabel) {
+      L.circleMarker(latest, {
+        radius: 10, color: "#245f8f", fillOpacity: 0, weight: 2, opacity: 0.9, interactive: false,
+      }).addTo(layers);
+    }
+    const currentLabel = `${dbzLabel(latestPoint.max_dbz_lower, latestPoint.max_dbz_upper)}${
+      volumeLabel ? `<span class="volume-detail">${volumeLabel}</span>` : ""
+    }`;
     L.circleMarker(latest, { radius: 6, color: "#fff", fillColor: "#d9682f", fillOpacity: 1, weight: 2 })
-      .bindTooltip(dbzLabel(latestPoint.max_dbz_lower, latestPoint.max_dbz_upper), { permanent: true, direction: "top", className: "intensity-current" }).addTo(layers);
+      .bindTooltip(currentLabel, { permanent: true, direction: "top", className: "intensity-current" }).addTo(layers);
     if (historical) continue;
     const forecast = (tracker.forecasts || []).find((item) => item.track_id === track.track_id);
     const predictions = forecast?.available ? forecast.predicted_positions || [] : [];
@@ -422,7 +547,7 @@ async function refreshDashboard() {
       selectedHistoryFilename = null;
     }
     renderStatus(status);
-    renderTracks(tracker, assessments);
+    renderTracks(tracker, assessments, status.volume);
     updateTimelineControls();
     await renderTimelineMap();
   } catch (error) {
@@ -431,6 +556,15 @@ async function refreshDashboard() {
     notice.textContent = `Dashboard data could not be loaded: ${error.message}`;
   } finally { button.disabled = false; }
 }
+
+const guideDialog = document.getElementById("guideDialog");
+document.getElementById("guideButton").addEventListener("click", () => {
+  if (typeof guideDialog.showModal === "function") guideDialog.showModal();
+  else guideDialog.setAttribute("open", "");
+});
+guideDialog.addEventListener("click", (event) => {
+  if (event.target === guideDialog && typeof guideDialog.close === "function") guideDialog.close();
+});
 
 document.getElementById("refreshButton").addEventListener("click", refreshDashboard);
 document.getElementById("timelineSlider").addEventListener("input", (event) => {

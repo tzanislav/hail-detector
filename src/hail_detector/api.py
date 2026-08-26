@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from .archive import ArchiveStore
 from .config import Settings
 from .opera import OperaClient, OperaIngestionService
+from .opera_volume import OperaVolumeClient, OperaVolumeIngestionService
 
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -54,6 +55,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current = dict(opera)
         current["primary_source"] = "eumetnet_opera_dbzh_maximum_reflectivity"
         current["yarlovo"] = yarlovo
+        current["volume"] = archive.read_opera_volume_status() or {
+            "state": "starting" if settings.opera_volume_enabled else "disabled",
+            "experimental": True,
+            "detail": "No experimental OPERA volume poll has been recorded yet.",
+        }
         # Kept for a short transition period for API/dashboard consumers that
         # previously read the comparison feed from this nested key.
         current["opera"] = opera
@@ -107,6 +113,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "detail": "No OPERA comparison poll has been recorded yet.",
         }
 
+    @app.get("/opera/volume/status")
+    def opera_volume_status() -> dict[str, object]:
+        return archive.read_opera_volume_status() or {
+            "state": "starting" if settings.opera_volume_enabled else "disabled",
+            "experimental": True,
+            "detail": "No experimental OPERA volume poll has been recorded yet.",
+        }
+
     @app.get("/opera/history")
     def opera_history(hours: int = 24) -> dict[str, object]:
         if not 1 <= hours <= 24:
@@ -131,7 +145,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             def poll_once() -> dict[str, object]:
                 with OperaClient(settings.opera_api_url, settings.opera_lookback) as client:
-                    return OperaIngestionService(settings, archive, client).poll_once().as_dict()
+                    result = OperaIngestionService(settings, archive, client).poll_once().as_dict()
+                if settings.opera_volume_enabled:
+                    with OperaVolumeClient(
+                        settings.opera_volume_api_url, settings.opera_volume_lookback
+                    ) as volume_client:
+                        volume = OperaVolumeIngestionService(
+                            settings, archive, volume_client
+                        ).poll_once()
+                    result["volume"] = volume.as_dict(settings)
+                return result
 
             return await run_in_threadpool(poll_once)
         finally:
