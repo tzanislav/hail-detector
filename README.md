@@ -1,12 +1,18 @@
 # Hail detector
 
-This repository uses **EUMETNET OPERA DBZH maximum-reflectivity composites**
-as its primary observation, cell-tracking, map, and readiness source.
-**Yarlovo CAPPI** is preserved as a local secondary comparison and calibration
-source. Automatic hail candidates and alerts are deliberately disabled while
-the distinct OPERA product is calibrated against labelled events.
+This service monitors the EUMETNET **OPERA DBZH maximum-reflectivity composite** around Sofia. It archives native ODIM HDF5 composites, segments and tracks significant reflectivity cells, projects confirmed tracks through a fixed target radius, and can send a Telegram alert for a severe approaching signature.
 
-The service fetches the public OPERA composite API, preserves the original ODIM HDF5 files, checks feed age conservatively, segments significant native-grid DBZH cells, and links them into storm tracks. It preserves Yarlovo CAPPI PNGs and their colour-band calibration separately. An experimental, distant OPERA polar volume is also archived and shown only as a per-track vertical DBZH profile. The source investigations are in [`research/opera-composite-investigation.md`](research/opera-composite-investigation.md), [`research/opera-volume-investigation.md`](research/opera-volume-investigation.md), and [`research/yarlovo-radar-investigation.md`](research/yarlovo-radar-investigation.md).
+The optional Craiova OPERA polar-volume feed provides an experimental vertical DBZH profile for each confirmed primary track. It is displayed for context only and never changes the track, projection, or alert decision.
+
+## Alert rule
+
+Telegram delivery is enabled only for a fresh OPERA composite when all of these hold:
+
+- a confirmed track has a maximum observed band of at least **65 dBZ**;
+- its medium-or-higher confidence fitted trajectory enters the configured target radius within **30 minutes** (including immediate entry);
+- all current-frame archival, rendering, and analysis steps succeeded.
+
+This is a severe-reflectivity signature, not confirmation of hail and not an official weather warning. Transitions are deduplicated per track, and alerts expire only after 20 minutes of fresh non-qualifying data.
 
 ## Run locally
 
@@ -21,60 +27,29 @@ Use two processes in separate terminals:
 .\.venv\Scripts\uvicorn.exe hail_detector.api:app --app-dir src --reload
 ```
 
-The debug dashboard is at `http://127.0.0.1:8000/`. Its **Fetch latest** button performs an immediate primary-OPERA poll; the regular poller should still remain running for continuous updates. The status API is at `http://127.0.0.1:8000/status`; `/tracks` exposes the primary OPERA cell-track state; `/health` returns HTTP 503 until a fresh OPERA composite has been archived and analysed.
-
-The dashboard uses Leaflet and OpenStreetMap tiles to display the reprojected OPERA primary overlay, the Yarlovo secondary CAPPI overlay, the configured target radius, OPERA-segmented cells, tracks, projections, and alert boundary. The map's lower-edge timeline can scrub through whatever locally archived OPERA overlays exist from the last 24 hours; **Live** restores the current OPERA and Yarlovo view with its forecasts. Confirmed track cards also show an explicitly experimental DBZH vertical profile from the configured OPERA volume radar. OPERA maximum reflectivity is clearly labelled and no automatic hail decision is produced from it yet. A stale OPERA feed is intentionally shown as a prominent amber warning, not as a healthy live detection view.
+The debug dashboard is at `http://127.0.0.1:8000/`. `GET /health` returns HTTP 503 until a fresh primary composite has been archived and analysed. `GET /tracks`, `/assessments`, and `/alerts` expose the current OPERA state.
 
 ## Configuration
 
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
-| `HAIL_ARCHIVE_DIR` | `var/radar` | Runtime archive location. |
-| `HAIL_MANIFEST_URL` | Yarlovo active JSON manifest | Override only for testing or a verified source change. |
-| `HAIL_SOURCE_TIMEZONE` | `Europe/Sofia` | Timezone applied to the source filename timestamp. This fails safely if the source's timezone remains uncertain. |
-| `HAIL_MAX_FRAME_AGE_MINUTES` | `10` | A newer valid CAPPI frame is required for a `ready` status. |
-| `HAIL_POLL_INTERVAL_SECONDS` | `240` | Poll cadence. |
-| `HAIL_FRAME_RETENTION_HOURS` | `24` | Keep source frames and their per-frame outputs for this many hours. |
-| `HAIL_OPERA_ENABLED` | `true` | Enable the primary EUMETNET OPERA observation poller. `/health` follows this source. |
-| `HAIL_OPERA_API_URL` | OPERA DBZH composite API | Override only for a verified OPERA endpoint change. |
-| `HAIL_OPERA_LOOKBACK_MINUTES` | `70` | Recent OPERA window to archive on each poll. |
-| `HAIL_OPERA_MAX_FRAME_AGE_MINUTES` | `15` | Freshness threshold required for primary OPERA readiness. |
-| `HAIL_OPERA_SEGMENT_MINIMUM_DBZ` / `HAIL_OPERA_SEGMENT_MINIMUM_PIXELS` | `35` / `2` | Sensitive raw-component threshold. Every resulting component is archived, but not necessarily shown or tracked as a storm. |
-| `HAIL_OPERA_CENTROID_WEIGHT_EXPONENT` | `3` | OPERA cell centroid weights each native pixel by `(1 + dBZ - segmentation floor)^exponent`. The default cubic weighting pulls the track toward the strongest embedded radar core; changing it rebuilds the recent track window. |
-| `HAIL_OPERA_STORM_MIN_AREA_SQUARE_KM` / `HAIL_OPERA_STORM_MIN_45DBZ_CORE_SQUARE_KM` | `30` / `8` | An operational storm must meet both the broad-area and >=45 dBZ-core requirement, unless it passes the compact >=55 dBZ-core exception below. |
-| `HAIL_OPERA_STORM_MIN_55DBZ_CORE_SQUARE_KM` | `1` | A compact high-reflectivity core of this size is retained even if its wider component is small. This is still not a hail threshold. |
-| `HAIL_OPERA_TRACK_MINIMUM_CONFIRMATIONS` | `2` | Observations required before an OPERA track is shown on the dashboard or forecast. One-scan candidate tracks remain in the archived tracker state. |
-| `HAIL_OPERA_VOLUME_ENABLED` | `true` | Enable the experimental secondary DBZH polar-volume profile. It cannot affect health, tracking, trajectories, or alerts. |
-| `HAIL_OPERA_VOLUME_RADAR_ID` / `HAIL_OPERA_VOLUME_RADAR_NAME` | `0-642-0-rocra` / Craiova, Romania | Currently the closest public OPERA volume radar found for Sofia; it is about 185 km away. |
-| `HAIL_OPERA_VOLUME_API_URL` / `HAIL_OPERA_VOLUME_LOOKBACK_MINUTES` | Craiova OPERA scan endpoint / `15` | Override only after revalidating a volume-radar source. |
-| `HAIL_OPERA_VOLUME_MAX_BEAM_HEIGHT_METRES` | `20000` | Do not display volume beams above this MSL height on a storm card. |
-| `HAIL_YARLOVO_ANALYSIS_ENABLED` | `false` | Keep the secondary Yarlovo tracker and alert lifecycle disabled. Do not enable it while OPERA is primary. |
-| `HAIL_SEGMENT_MINIMUM_DBZ` | `35` | Lower dBZ bound required to include a validated pixel in a storm cell. |
-| `HAIL_SEGMENT_MINIMUM_PIXELS` | `4` | Smallest retained 8-connected cell. |
-| `HAIL_TRACKER_MAXIMUM_GAP_MINUTES` | `12` | Longest gap over which a cell can retain its storm-track ID. |
-| `HAIL_TRACKER_MAXIMUM_SPEED_KMH` | `160` | Association speed gate; this is not a weather forecast. |
-| `HAIL_TRACKER_MOTION_WINDOW_OBSERVATIONS` | `5` | Recent observations used by the recency-weighted motion fit. Raw centroids stay archived; the map path and trajectory use the fitted motion. |
-| `HAIL_TARGET_LATITUDE` / `HAIL_TARGET_LONGITUDE` | Sofia centre (`42.6977`, `23.3219`) | Development defaults for the fixed target. Set these to the actual protected location before alerts are built. |
-| `HAIL_WARNING_RADIUS_KM` | `10` | Target-radius intersection used by the projection layer. |
-| `HAIL_FORECAST_HORIZON_MINUTES` | `120` | Maximum constant-velocity projection horizon. Predictions require at least three observations; the map then marks +30, +60, and +120 minute positions when available. |
-| `HAIL_HIGH_DBZ_CALIBRATION_VALIDATED` | `false` | Safety gate: candidate Watches/Warnings remain suppressed until real 55+ dBZ PNG colours are verified. |
-| `HAIL_WATCH_MINIMUM_DBZ` / `HAIL_WARNING_MINIMUM_DBZ` / `HAIL_SEVERE_MINIMUM_DBZ` | `55` / `60` / `65` | Conservative lower-bound dBZ thresholds for the provisional radar-signature policy. |
-| `HAIL_ALERT_EXPIRY_MINUTES` | `20` | Fresh non-qualifying observations required before an active candidate alert expires. Stale data never expires alerts. |
+| `HAIL_OPERA_ENABLED` | `true` | Enable the primary OPERA DBZH composite poller. |
+| `HAIL_OPERA_LOOKBACK_MINUTES` / `HAIL_OPERA_MAX_FRAME_AGE_MINUTES` | `70` / `15` | Recent archive window and freshness requirement. |
+| `HAIL_OPERA_SEGMENT_MINIMUM_DBZ` / `HAIL_OPERA_SEGMENT_MINIMUM_PIXELS` | `35` / `2` | Sensitive raw-component segmentation threshold. |
+| `HAIL_OPERA_STORM_MIN_AREA_SQUARE_KM` / `HAIL_OPERA_STORM_MIN_45DBZ_CORE_SQUARE_KM` | `30` / `8` | Broad-cell operational tracking gate. |
+| `HAIL_OPERA_STORM_MIN_55DBZ_CORE_SQUARE_KM` | `1` | Compact-core exception to the broad-cell gate. |
+| `HAIL_OPERA_TRACK_MINIMUM_CONFIRMATIONS` | `2` | Observations required before a track is operationally confirmed. |
+| `HAIL_TARGET_LATITUDE` / `HAIL_TARGET_LONGITUDE` / `HAIL_WARNING_RADIUS_KM` | Sofia centre / `10` | Fixed protected location and radius. |
+| `HAIL_SEVERE_MINIMUM_DBZ` / `HAIL_SEVERE_MAXIMUM_LEAD_MINUTES` | `65` / `30` | Telegram severe-reflectivity threshold and maximum target-entry lead time. |
+| `HAIL_MINIMUM_TRAJECTORY_CONFIDENCE` | `medium` | Lowest allowed fitted-track confidence: `low`, `medium`, or `high`. |
+| `HAIL_ALERT_EXPIRY_MINUTES` | `20` | Fresh non-qualifying period before an active alert expires. |
+| `HAIL_OPERA_VOLUME_ENABLED` | `true` | Enable the optional Craiova volume-profile feed. It cannot affect alerts. |
+| `HAIL_TELEGRAM_ENABLED` | `false` | Enable Telegram delivery of eligible OPERA alert transitions. |
+| `HAIL_TELEGRAM_BOT_TOKEN` / `HAIL_TELEGRAM_CHAT_ID` | unset | Required when Telegram is enabled. Keep the token secret. |
+| `HAIL_ENV_FILE` | `.env` | Optional dotenv path; process environment values take precedence. |
 
-Runtime files under `var/` are intentionally ignored by Git. The poller stores raw OPERA HDF5 composites, native-grid OPERA cells/tracks, their Sofia map overlays, and separate Yarlovo local CAPPI comparison archives there. Experimental OPERA polar-volume DBZH files are isolated under `var/radar/opera/volume/`. `GET /opera/history` exposes available locally archived OPERA overlays for a requested 1–24 hour window, so the dashboard timeline naturally fills as polling continues. Each OPERA cell JSON records accepted `cells` separately from raw `rejected_cells`, so echo filtering remains auditable.
-
-Source frames and their per-frame outputs are pruned after 24 hours by default. Persistent track and status files remain so the live view retains its current state.
-
-## Verification
+## Verify
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
-
-The tests use the saved Yarlovo frames and do not call the live radar endpoint.
-
-## Safety boundary
-
-This milestone returns observed **radar reflectivity**, not confirmed hail. It exposes a short-horizon constant-velocity OPERA cell-track projection, clearly separate from a meteorological forecast or official warning. OPERA is a maximum-reflectivity composite rather than Yarlovo's 2.5 km CAPPI slice, so all automatic hail candidates and alert delivery are disabled pending a separately validated OPERA policy.
-
-The notification layer currently writes transition events to a local file outbox only. It deduplicates unchanged candidates, escalates a Watch to a Warning, records de-escalation/expiry, and refuses to mutate state when data is stale. An external channel such as Telegram will be added only after its credentials and delivery policy are chosen.

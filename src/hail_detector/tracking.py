@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from math import asin, atan2, cos, degrees, radians, sin, sqrt
 from typing import Any
 
-from .geospatial import LatLon, PixelCoordinate, RadarImageBounds, YARLOVO_BOUNDS
+from .geospatial import LatLon, PixelCoordinate, RadarImageBounds, SOFIA_MAP_BOUNDS
 from .motion import estimate_track_motion
 from .storm_cells import StormCell
 
@@ -118,7 +118,7 @@ class TrackManager:
         *,
         maximum_gap: timedelta,
         maximum_speed_kmh: int,
-        bounds: RadarImageBounds = YARLOVO_BOUNDS,
+        bounds: RadarImageBounds = SOFIA_MAP_BOUNDS,
         motion_window_observations: int = 5,
         tracks: dict[str, StormTrack] | None = None,
         last_processed_at: datetime | None = None,
@@ -285,7 +285,7 @@ class TrackManager:
         *,
         maximum_gap: timedelta,
         maximum_speed_kmh: int,
-        bounds: RadarImageBounds = YARLOVO_BOUNDS,
+        bounds: RadarImageBounds = SOFIA_MAP_BOUNDS,
         motion_window_observations: int = 5,
     ) -> "TrackManager":
         if value is None:

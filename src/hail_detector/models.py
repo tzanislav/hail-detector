@@ -6,7 +6,7 @@ from datetime import datetime
 
 @dataclass(frozen=True)
 class RadarFrame:
-    """A single accepted CAPPI frame described by the public manifest."""
+    """A single accepted radar observation frame."""
 
     filename: str
     url: str
@@ -16,4 +16,3 @@ class RadarFrame:
     @property
     def source_timestamp(self) -> str:
         return self.observed_at.isoformat()
-

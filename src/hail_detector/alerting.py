@@ -7,7 +7,7 @@ from typing import Any, Iterable
 from .archive import ArchiveStore
 
 
-LEVEL_RANK = {"Hail Watch": 1, "Hail Warning": 2}
+LEVEL_RANK = {"Severe Reflectivity Alert": 1}
 
 
 @dataclass
@@ -45,6 +45,7 @@ class AlertEvent:
     level: str
     previous_level: str | None
     occurred_at: datetime
+    source: str
     reason: str
 
     def as_dict(self) -> dict[str, object]:
@@ -83,6 +84,7 @@ class AlertLifecycle:
         level: str,
         previous_level: str | None,
         occurred_at: datetime,
+        source: str,
         reason: str,
     ) -> AlertEvent:
         event_id = "-".join(
@@ -99,6 +101,7 @@ class AlertLifecycle:
             level=level,
             previous_level=previous_level,
             occurred_at=occurred_at,
+            source=source,
             reason=reason,
         )
 
@@ -146,6 +149,7 @@ class AlertLifecycle:
         for track_id, assessment in candidates.items():
             level = assessment["candidate_level"]
             record = records.get(track_id)
+            source = str(assessment.get("source", "eumetnet_opera_dbzh_maximum_reflectivity"))
             reason = "; ".join(assessment.get("reasons", ()))
             if record is None or record.status == "expired":
                 records[track_id] = AlertRecord(
@@ -157,7 +161,9 @@ class AlertLifecycle:
                     last_evaluated_at=evaluated_at,
                 )
                 transitions.append(
-                    self._event("activated", track_id, level, None, evaluated_at, reason)
+                    self._event(
+                        "activated", track_id, level, None, evaluated_at, source, reason
+                    )
                 )
                 continue
 
@@ -168,7 +174,7 @@ class AlertLifecycle:
                 record.level = level
                 transitions.append(
                     self._event(
-                        "escalated", track_id, level, previous_level, evaluated_at, reason
+                        "escalated", track_id, level, previous_level, evaluated_at, source, reason
                     )
                 )
             elif LEVEL_RANK[level] < LEVEL_RANK[record.level]:
@@ -176,7 +182,7 @@ class AlertLifecycle:
                 record.level = level
                 transitions.append(
                     self._event(
-                        "deescalated", track_id, level, previous_level, evaluated_at, reason
+                        "deescalated", track_id, level, previous_level, evaluated_at, source, reason
                     )
                 )
 
@@ -195,6 +201,7 @@ class AlertLifecycle:
                         record.level,
                         record.level,
                         evaluated_at,
+                        "eumetnet_opera_dbzh_maximum_reflectivity",
                         "no fresh qualifying candidate was observed before the expiry interval",
                     )
                 )

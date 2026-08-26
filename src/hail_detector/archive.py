@@ -28,17 +28,11 @@ class ArchiveStore:
 
     def __init__(self, root: Path):
         self.root = root
-        self.frames_dir = root / "frames"
-        self.manifests_dir = root / "manifests"
-        self.metadata_dir = root / "metadata"
-        self.calibration_dir = root / "calibration"
-        self.cells_dir = root / "cells"
-        self.tracks_dir = root / "tracks"
         self.assessments_dir = root / "assessments"
         self.alerts_dir = root / "alerts"
         self.notification_outbox_dir = root / "notification-outbox"
+        self.notification_delivery_dir = root / "notification-delivery"
         self.alert_audit_dir = root / "alert-audit"
-        self.status_dir = root / "status"
         self.opera_dir = root / "opera"
         self.opera_frames_dir = self.opera_dir / "frames"
         self.opera_manifests_dir = self.opera_dir / "manifests"
@@ -63,18 +57,6 @@ class ArchiveStore:
     @staticmethod
     def _json_bytes(data: dict[str, Any]) -> bytes:
         return (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8")
-
-    def raw_path(self, frame: RadarFrame) -> Path:
-        return self.frames_dir / frame.filename
-
-    def has_raw_frame(self, frame: RadarFrame) -> bool:
-        return self.raw_path(frame).is_file()
-
-    def archive_manifest(self, payload: dict[str, Any], fetched_at: datetime) -> Path:
-        timestamp = fetched_at.strftime("%Y%m%dT%H%M%S%fZ")
-        path = self.manifests_dir / f"JAR-{timestamp}.json"
-        self._atomic_write(path, self._json_bytes(payload))
-        return path
 
     def _archive_frame(
         self,
@@ -173,12 +155,6 @@ class ArchiveStore:
 
         self._prune_source_frames_older_than(
             cutoff,
-            raw_dir=self.frames_dir,
-            metadata_dir=self.metadata_dir,
-            frame_artifacts=((self.calibration_dir, ".json"), (self.cells_dir, ".json")),
-        )
-        self._prune_source_frames_older_than(
-            cutoff,
             raw_dir=self.opera_frames_dir,
             metadata_dir=self.opera_metadata_dir,
             frame_artifacts=(
@@ -191,16 +167,6 @@ class ArchiveStore:
             cutoff,
             raw_dir=self.opera_volume_frames_dir,
             metadata_dir=self.opera_volume_metadata_dir,
-        )
-
-    def archive_frame(self, frame: RadarFrame, content: bytes, fetched_at: datetime) -> ArchivedFrame:
-        return self._archive_frame(
-            frame,
-            content,
-            fetched_at,
-            raw_dir=self.frames_dir,
-            metadata_dir=self.metadata_dir,
-            source="yarlovo_cappi",
         )
 
     def opera_raw_path(self, frame: RadarFrame) -> Path:
@@ -326,36 +292,6 @@ class ArchiveStore:
             )
         return sorted(history, key=lambda frame: (frame["observed_at"], frame["filename"]))
 
-    def write_calibration(self, frame: RadarFrame, summary: dict[str, Any]) -> Path:
-        path = self.calibration_dir / f"{frame.filename}.json"
-        self._atomic_write(path, self._json_bytes(summary))
-        return path
-
-    def write_cells(self, frame: RadarFrame, cells: list[dict[str, Any]]) -> Path:
-        path = self.cells_dir / f"{frame.filename}.json"
-        self._atomic_write(
-            path,
-            self._json_bytes(
-                {
-                    "filename": frame.filename,
-                    "observed_at": frame.source_timestamp,
-                    "cells": cells,
-                }
-            ),
-        )
-        return path
-
-    def write_tracker_state(self, state: dict[str, Any]) -> Path:
-        path = self.tracks_dir / "state.json"
-        self._atomic_write(path, self._json_bytes(state))
-        return path
-
-    def read_tracker_state(self) -> dict[str, Any] | None:
-        path = self.tracks_dir / "state.json"
-        if not path.is_file():
-            return None
-        return json.loads(path.read_text(encoding="utf-8"))
-
     def write_assessments(self, assessments: list[dict[str, Any]], target: dict[str, Any]) -> Path:
         path = self.assessments_dir / "latest.json"
         self._atomic_write(path, self._json_bytes({"target": target, "assessments": assessments}))
@@ -383,20 +319,39 @@ class ArchiveStore:
         self._atomic_write(path, self._json_bytes(event))
         return path
 
+    def read_pending_notification_events(self) -> list[dict[str, Any]]:
+        """Return undelivered outbox events in creation order.
+
+        A delivery receipt, including a deliberately skipped stale event, makes an
+        event terminal. Failed events remain pending for a later fresh poll.
+        """
+
+        events: list[dict[str, Any]] = []
+        if not self.notification_outbox_dir.is_dir():
+            return events
+        for path in sorted(self.notification_outbox_dir.glob("*.json")):
+            event = json.loads(path.read_text(encoding="utf-8"))
+            event_id = event.get("event_id")
+            if not isinstance(event_id, str):
+                raise ValueError(f"notification outbox item has no event_id: {path}")
+            if not (self.notification_delivery_dir / f"{event_id}.json").is_file():
+                events.append(event)
+        return events
+
+    def write_notification_delivery(
+        self,
+        event_id: str,
+        receipt: dict[str, Any],
+    ) -> Path:
+        path = self.notification_delivery_dir / f"{event_id}.json"
+        self._atomic_write(path, self._json_bytes(receipt))
+        return path
+
     def write_alert_audit(self, evaluated_at: datetime, audit: dict[str, Any]) -> Path:
         stamp = evaluated_at.strftime("%Y%m%dT%H%M%S%fZ")
         path = self.alert_audit_dir / f"{stamp}.json"
         self._atomic_write(path, self._json_bytes(audit))
         return path
-
-    def write_status(self, status: dict[str, Any]) -> None:
-        self._atomic_write(self.status_dir / "latest.json", self._json_bytes(status))
-
-    def read_status(self) -> dict[str, Any] | None:
-        path = self.status_dir / "latest.json"
-        if not path.is_file():
-            return None
-        return json.loads(path.read_text(encoding="utf-8"))
 
     def write_opera_status(self, status: dict[str, Any]) -> None:
         self._atomic_write(self.opera_status_dir / "latest.json", self._json_bytes(status))

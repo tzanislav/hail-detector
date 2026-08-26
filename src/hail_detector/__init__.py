@@ -1,2 +1,1 @@
-"""Radar ingestion and calibration primitives for the hail detector."""
-
+"""OPERA radar ingestion, tracking, and alerting primitives."""

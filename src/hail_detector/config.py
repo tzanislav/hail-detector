@@ -4,10 +4,10 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 import os
 from pathlib import Path
-from zoneinfo import ZoneInfo
+
+from dotenv import load_dotenv
 
 
-DEFAULT_MANIFEST_URL = "https://www.weathermod-bg.eu/wr/json/JAR.json"
 DEFAULT_OPERA_API_URL = (
     "https://api.meteogate.eu/eu-eumetnet-weather-radar/collections/"
     "observations/locations/0-20010-0-OPERA"
@@ -48,7 +48,7 @@ def _boolean(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class TargetLocation:
-    """A fixed target point; defaults are development-only Sofia centre values."""
+    """A fixed protected point; defaults are development Sofia-centre values."""
 
     latitude: float = 42.6977
     longitude: float = 23.3219
@@ -71,52 +71,61 @@ class TargetLocation:
 
 
 @dataclass(frozen=True)
-class HailPolicySettings:
-    """Conservative radar-signature policy; not an official warning policy."""
+class SevereAlertSettings:
+    """OPERA DBZH alert criteria; these are not official weather warnings."""
 
-    high_dbz_calibration_validated: bool = False
-    watch_minimum_dbz: int = 55
-    warning_minimum_dbz: int = 60
-    severe_minimum_dbz: int = 65
-    watch_minimum_lead_minutes: int = 30
-    watch_maximum_lead_minutes: int = 90
-    warning_minimum_lead_minutes: int = 10
-    warning_maximum_lead_minutes: int = 45
+    minimum_dbz: int = 65
+    maximum_lead_minutes: int = 30
+    minimum_trajectory_confidence: str = "medium"
 
     def __post_init__(self) -> None:
-        if not 0 < self.watch_minimum_dbz <= self.warning_minimum_dbz <= self.severe_minimum_dbz:
-            raise ValueError("hail dBZ thresholds must be increasing positive values")
-        if not 0 <= self.watch_minimum_lead_minutes <= self.watch_maximum_lead_minutes:
-            raise ValueError("watch lead-time bounds are invalid")
-        if not 0 <= self.warning_minimum_lead_minutes <= self.warning_maximum_lead_minutes:
-            raise ValueError("warning lead-time bounds are invalid")
+        if self.minimum_dbz <= 0:
+            raise ValueError("severe alert dBZ threshold must be positive")
+        if self.maximum_lead_minutes <= 0:
+            raise ValueError("severe alert lead time must be positive")
+        if self.minimum_trajectory_confidence not in {"low", "medium", "high"}:
+            raise ValueError(
+                "minimum trajectory confidence must be low, medium, or high"
+            )
 
 
 @dataclass(frozen=True)
 class AlertLifecycleSettings:
-    """State-management settings; delivery adapters are intentionally separate."""
-
     expiry: timedelta = timedelta(minutes=20)
 
 
 @dataclass(frozen=True)
+class TelegramSettings:
+    enabled: bool = False
+    bot_token: str | None = None
+    chat_id: str | None = None
+    request_timeout_seconds: float = 10.0
+    maximum_event_age: timedelta = timedelta(minutes=10)
+
+    def __post_init__(self) -> None:
+        if self.enabled and not self.bot_token:
+            raise ValueError("HAIL_TELEGRAM_BOT_TOKEN is required when Telegram is enabled")
+        if self.enabled and not self.chat_id:
+            raise ValueError("HAIL_TELEGRAM_CHAT_ID is required when Telegram is enabled")
+        if self.request_timeout_seconds <= 0:
+            raise ValueError("Telegram request timeout must be positive")
+        if self.maximum_event_age <= timedelta(0):
+            raise ValueError("Telegram maximum event age must be positive")
+
+
+@dataclass(frozen=True)
 class Settings:
-    """Runtime settings for the ingestion process and status API."""
+    """Runtime configuration for OPERA composite and Craiova volume ingestion."""
 
     archive_root: Path
-    manifest_url: str
-    source_timezone: ZoneInfo
-    maximum_frame_age: timedelta
     poll_interval_seconds: int
-    segmentation_minimum_dbz: int
-    segmentation_minimum_pixels: int
     tracker_maximum_gap: timedelta
     tracker_maximum_speed_kmh: int
     frame_retention: timedelta = timedelta(hours=24)
     tracker_motion_window_observations: int = 5
     target: TargetLocation = field(default_factory=TargetLocation)
     forecast_horizon: timedelta = timedelta(minutes=120)
-    hail_policy: HailPolicySettings = field(default_factory=HailPolicySettings)
+    severe_alert: SevereAlertSettings = field(default_factory=SevereAlertSettings)
     alert_lifecycle: AlertLifecycleSettings = field(default_factory=AlertLifecycleSettings)
     opera_enabled: bool = True
     opera_api_url: str = DEFAULT_OPERA_API_URL
@@ -136,22 +145,15 @@ class Settings:
     opera_volume_lookback: timedelta = timedelta(minutes=15)
     opera_volume_maximum_frame_age: timedelta = timedelta(minutes=15)
     opera_volume_maximum_beam_height_metres: int = 20_000
-    yarlovo_analysis_enabled: bool = False
+    telegram: TelegramSettings = field(default_factory=TelegramSettings)
 
     @classmethod
     def from_environment(cls) -> "Settings":
+        environment_file = Path(os.getenv("HAIL_ENV_FILE", ".env"))
+        load_dotenv(environment_file, override=False)
         return cls(
             archive_root=Path(os.getenv("HAIL_ARCHIVE_DIR", "var/radar")),
-            manifest_url=os.getenv("HAIL_MANIFEST_URL", DEFAULT_MANIFEST_URL),
-            # Treating a potentially UTC source label as Sofia time is conservative:
-            # it can make a valid frame look older, never newer.
-            source_timezone=ZoneInfo(os.getenv("HAIL_SOURCE_TIMEZONE", "Europe/Sofia")),
-            maximum_frame_age=timedelta(
-                minutes=_positive_int("HAIL_MAX_FRAME_AGE_MINUTES", 10)
-            ),
             poll_interval_seconds=_positive_int("HAIL_POLL_INTERVAL_SECONDS", 240),
-            segmentation_minimum_dbz=_positive_int("HAIL_SEGMENT_MINIMUM_DBZ", 35),
-            segmentation_minimum_pixels=_positive_int("HAIL_SEGMENT_MINIMUM_PIXELS", 4),
             tracker_maximum_gap=timedelta(
                 minutes=_positive_int("HAIL_TRACKER_MAXIMUM_GAP_MINUTES", 12)
             ),
@@ -172,25 +174,16 @@ class Settings:
             forecast_horizon=timedelta(
                 minutes=_positive_int("HAIL_FORECAST_HORIZON_MINUTES", 120)
             ),
-            hail_policy=HailPolicySettings(
-                high_dbz_calibration_validated=_boolean(
-                    "HAIL_HIGH_DBZ_CALIBRATION_VALIDATED", False
+            severe_alert=SevereAlertSettings(
+                minimum_dbz=_positive_int("HAIL_SEVERE_MINIMUM_DBZ", 65),
+                maximum_lead_minutes=_positive_int(
+                    "HAIL_SEVERE_MAXIMUM_LEAD_MINUTES", 30
                 ),
-                watch_minimum_dbz=_positive_int("HAIL_WATCH_MINIMUM_DBZ", 55),
-                warning_minimum_dbz=_positive_int("HAIL_WARNING_MINIMUM_DBZ", 60),
-                severe_minimum_dbz=_positive_int("HAIL_SEVERE_MINIMUM_DBZ", 65),
-                watch_minimum_lead_minutes=_positive_int(
-                    "HAIL_WATCH_MINIMUM_LEAD_MINUTES", 30
-                ),
-                watch_maximum_lead_minutes=_positive_int(
-                    "HAIL_WATCH_MAXIMUM_LEAD_MINUTES", 90
-                ),
-                warning_minimum_lead_minutes=_positive_int(
-                    "HAIL_WARNING_MINIMUM_LEAD_MINUTES", 10
-                ),
-                warning_maximum_lead_minutes=_positive_int(
-                    "HAIL_WARNING_MAXIMUM_LEAD_MINUTES", 45
-                ),
+                minimum_trajectory_confidence=os.getenv(
+                    "HAIL_MINIMUM_TRAJECTORY_CONFIDENCE", "medium"
+                )
+                .strip()
+                .lower(),
             ),
             alert_lifecycle=AlertLifecycleSettings(
                 expiry=timedelta(minutes=_positive_int("HAIL_ALERT_EXPIRY_MINUTES", 20))
@@ -243,5 +236,15 @@ class Settings:
             opera_volume_maximum_beam_height_metres=_positive_int(
                 "HAIL_OPERA_VOLUME_MAX_BEAM_HEIGHT_METRES", 20_000
             ),
-            yarlovo_analysis_enabled=_boolean("HAIL_YARLOVO_ANALYSIS_ENABLED", False),
+            telegram=TelegramSettings(
+                enabled=_boolean("HAIL_TELEGRAM_ENABLED", False),
+                bot_token=os.getenv("HAIL_TELEGRAM_BOT_TOKEN"),
+                chat_id=os.getenv("HAIL_TELEGRAM_CHAT_ID"),
+                request_timeout_seconds=_positive_float(
+                    "HAIL_TELEGRAM_TIMEOUT_SECONDS", 10.0
+                ),
+                maximum_event_age=timedelta(
+                    minutes=_positive_int("HAIL_TELEGRAM_MAX_EVENT_AGE_MINUTES", 10)
+                ),
+            ),
         )

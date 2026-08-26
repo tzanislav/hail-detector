@@ -13,6 +13,7 @@ from .archive import ArchiveStore
 from .config import Settings
 from .opera import OperaClient, OperaIngestionService
 from .opera_volume import OperaVolumeClient, OperaVolumeIngestionService
+from .telegram import TelegramNotifier
 
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -30,10 +31,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="Hail detector",
         version="0.1.0",
-        description=(
-            "Yarlovo CAPPI decision processing, OPERA comparison data, "
-            "radar-signature assessment and debug dashboard."
-        ),
+        description="OPERA DBZH severe-reflectivity alerts and debug dashboard.",
     )
     opera_fetch_lock = Lock()
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -44,25 +42,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/status")
     def status() -> dict[str, object]:
-        yarlovo = archive.read_status() or {
-            "state": "starting",
-            "detail": "No poll result has been recorded yet.",
-        }
-        opera = archive.read_opera_status() or {
-            "state": "starting" if settings.opera_enabled else "disabled",
-            "detail": "No OPERA comparison poll has been recorded yet.",
-        }
-        current = dict(opera)
+        current = dict(
+            archive.read_opera_status()
+            or {
+                "state": "starting" if settings.opera_enabled else "disabled",
+                "detail": "No OPERA composite poll has been recorded yet.",
+            }
+        )
         current["primary_source"] = "eumetnet_opera_dbzh_maximum_reflectivity"
-        current["yarlovo"] = yarlovo
         current["volume"] = archive.read_opera_volume_status() or {
             "state": "starting" if settings.opera_volume_enabled else "disabled",
             "experimental": True,
-            "detail": "No experimental OPERA volume poll has been recorded yet.",
+            "detail": "No Craiova volume poll has been recorded yet.",
         }
-        # Kept for a short transition period for API/dashboard consumers that
-        # previously read the comparison feed from this nested key.
-        current["opera"] = opera
         return current
 
     @app.get("/health")
@@ -80,45 +72,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "tracks": [],
         }
 
-    @app.get("/yarlovo/tracks")
-    def yarlovo_tracks() -> dict[str, object]:
-        return archive.read_tracker_state() or {
-            "source": "yarlovo_cappi",
-            "last_processed_at": None,
-            "next_track_number": 1,
-            "tracks": [],
-        }
-
     @app.get("/assessments")
     def assessments() -> dict[str, object]:
-        return {
+        return archive.read_assessments() or {
             "target": settings.target.as_dict(),
             "assessments": [],
-            "state": "disabled",
-            "reason": "OPERA hail thresholds require separate validation before assessment.",
         }
 
     @app.get("/alerts")
     def alerts() -> dict[str, object]:
-        return {
-            "records": [],
-            "state": "disabled",
-            "reason": "Automatic alerts are disabled while OPERA hail calibration is pending.",
-        }
-
-    @app.get("/opera/status")
-    def opera_status() -> dict[str, object]:
-        return archive.read_opera_status() or {
-            "state": "starting" if settings.opera_enabled else "disabled",
-            "detail": "No OPERA comparison poll has been recorded yet.",
-        }
+        return archive.read_alert_state() or {"records": []}
 
     @app.get("/opera/volume/status")
     def opera_volume_status() -> dict[str, object]:
         return archive.read_opera_volume_status() or {
             "state": "starting" if settings.opera_volume_enabled else "disabled",
             "experimental": True,
-            "detail": "No experimental OPERA volume poll has been recorded yet.",
+            "detail": "No Craiova volume poll has been recorded yet.",
         }
 
     @app.get("/opera/history")
@@ -136,45 +106,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/opera/fetch")
     async def fetch_opera() -> dict[str, object]:
-        """Request and archive the newest OPERA composites immediately."""
-
         if not settings.opera_enabled:
             raise HTTPException(status_code=409, detail="OPERA ingestion is disabled")
         if not opera_fetch_lock.acquire(blocking=False):
             raise HTTPException(status_code=409, detail="an OPERA fetch is already in progress")
         try:
             def poll_once() -> dict[str, object]:
-                with OperaClient(settings.opera_api_url, settings.opera_lookback) as client:
-                    result = OperaIngestionService(settings, archive, client).poll_once().as_dict()
-                if settings.opera_volume_enabled:
-                    with OperaVolumeClient(
-                        settings.opera_volume_api_url, settings.opera_volume_lookback
-                    ) as volume_client:
-                        volume = OperaVolumeIngestionService(
-                            settings, archive, volume_client
-                        ).poll_once()
-                    result["volume"] = volume.as_dict(settings)
-                return result
+                notifier = (
+                    TelegramNotifier(settings.telegram)
+                    if settings.telegram.enabled
+                    else None
+                )
+                try:
+                    with OperaClient(settings.opera_api_url, settings.opera_lookback) as client:
+                        result = OperaIngestionService(
+                            settings, archive, client, telegram_notifier=notifier
+                        ).poll_once().as_dict()
+                    if settings.opera_volume_enabled:
+                        with OperaVolumeClient(
+                            settings.opera_volume_api_url, settings.opera_volume_lookback
+                        ) as volume_client:
+                            volume = OperaVolumeIngestionService(
+                                settings, archive, volume_client
+                            ).poll_once()
+                        result["volume"] = volume.as_dict(settings)
+                    return result
+                finally:
+                    if notifier is not None:
+                        notifier.close()
 
             return await run_in_threadpool(poll_once)
         finally:
             opera_fetch_lock.release()
-
-    @app.get("/frames/{filename}", include_in_schema=False)
-    def frame(filename: str) -> FileResponse:
-        path = archive.frames_dir / _safe_filename(filename)
-        if not path.is_file():
-            raise HTTPException(status_code=404, detail="radar frame not found")
-        return FileResponse(path, media_type="image/png")
-
-    @app.get("/cells/{filename}")
-    def cells(filename: str) -> dict[str, object]:
-        path = archive.cells_dir / f"{_safe_filename(filename)}.json"
-        if not path.is_file():
-            raise HTTPException(status_code=404, detail="cell analysis not found")
-        import json
-
-        return json.loads(path.read_text(encoding="utf-8"))
 
     @app.get("/opera/cells/{filename}")
     def opera_cells(filename: str) -> dict[str, object]:

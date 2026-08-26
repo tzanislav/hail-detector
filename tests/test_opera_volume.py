@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import h5py
 import httpx
@@ -26,12 +25,7 @@ VOLUME_URL = f"https://files.example.test/{VOLUME_FILE}"
 def _settings(root: Path) -> Settings:
     return Settings(
         archive_root=root,
-        manifest_url="https://example.test/JAR.json",
-        source_timezone=ZoneInfo("Europe/Sofia"),
-        maximum_frame_age=timedelta(minutes=10),
         poll_interval_seconds=240,
-        segmentation_minimum_dbz=35,
-        segmentation_minimum_pixels=4,
         tracker_maximum_gap=timedelta(minutes=12),
         tracker_maximum_speed_kmh=160,
         opera_volume_lookback=timedelta(minutes=15),

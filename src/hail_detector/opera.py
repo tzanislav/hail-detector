@@ -15,12 +15,21 @@ import numpy as np
 from PIL import Image
 from pyproj import Transformer
 
+from .alerting import AlertLifecycle
 from .archive import ArchiveStore
-from .calibration import DbzBand
 from .config import Settings
-from .geospatial import LatLon, PixelCoordinate, RadarImageBounds, YARLOVO_BOUNDS, _inverse_mercator_y, _mercator_y
+from .geospatial import (
+    LatLon,
+    PixelCoordinate,
+    RadarImageBounds,
+    SOFIA_MAP_BOUNDS,
+    _inverse_mercator_y,
+    _mercator_y,
+)
+from .hail_policy import HailAssessment, assess_track
 from .models import RadarFrame
-from .storm_cells import PixelBounds, StormCell
+from .storm_cells import DbzBand, PixelBounds, StormCell
+from .telegram import TelegramDeliveryResult, TelegramNotifier
 from .tracking import TrackManager
 from .trajectory import project_track
 
@@ -62,13 +71,22 @@ class OperaPollResult:
     forecasted_tracks: int = 0
     intersecting_target_tracks: int = 0
     earliest_intersection_at: str | None = None
+    severe_alert_candidates: int = 0
+    active_alerts: int = 0
+    alert_transitions: int = 0
+    notification_outbox_events: int = 0
+    telegram_delivery_attempts: int = 0
+    telegram_deliveries: int = 0
+    telegram_delivery_failures: int = 0
+    telegram_delivery_skipped_stale: int = 0
+    alert_processing_deferred: bool = True
     analysis_errors: tuple[str, ...] = ()
     error: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
-            "source": "EUMETNET OPERA CIRRUS maximum reflectivity composite",
-            "product": "DBZH maximum reflectivity (not a CAPPI slice)",
+            "source": "EUMETNET OPERA maximum-reflectivity composite",
+            "product": "DBZH maximum reflectivity",
             "state": self.state,
             "fetched_at": self.fetched_at.isoformat(),
             "latest_dbzh_composite": (
@@ -93,9 +111,15 @@ class OperaPollResult:
             "forecasted_tracks": self.forecasted_tracks,
             "intersecting_target_tracks": self.intersecting_target_tracks,
             "earliest_intersection_at": self.earliest_intersection_at,
-            "hail_assessment": "disabled pending OPERA-specific hail calibration",
-            "hail_watch_candidates": 0,
-            "hail_warning_candidates": 0,
+            "severe_alert_candidates": self.severe_alert_candidates,
+            "active_alerts": self.active_alerts,
+            "alert_transitions": self.alert_transitions,
+            "notification_outbox_events": self.notification_outbox_events,
+            "telegram_delivery_attempts": self.telegram_delivery_attempts,
+            "telegram_deliveries": self.telegram_deliveries,
+            "telegram_delivery_failures": self.telegram_delivery_failures,
+            "telegram_delivery_skipped_stale": self.telegram_delivery_skipped_stale,
+            "alert_processing_deferred": self.alert_processing_deferred,
             "analysis_errors": list(self.analysis_errors),
             "error": self.error,
         }
@@ -252,7 +276,7 @@ def _overlay_sample_coordinates(
 
 
 def _rgba_for_dbzh(values: np.ndarray, valid: np.ndarray) -> np.ndarray:
-    """Use a deliberately labelled visual palette; this is not Yarlovo calibration."""
+    """Use a deliberately labelled visual palette for the OPERA overlay."""
 
     rgba = np.zeros((*values.shape, 4), dtype=np.uint8)
     palette = (
@@ -271,7 +295,7 @@ def _rgba_for_dbzh(values: np.ndarray, valid: np.ndarray) -> np.ndarray:
 
 def render_opera_overlay(
     content: bytes,
-    bounds: RadarImageBounds = YARLOVO_BOUNDS,
+    bounds: RadarImageBounds = SOFIA_MAP_BOUNDS,
 ) -> tuple[bytes, dict[str, Any]]:
     """Crop and reproject an OPERA ODIM composite to the existing Sofia map bounds."""
 
@@ -441,7 +465,7 @@ def segment_opera_cells(
     minimum_dbz: int,
     minimum_pixels: int,
     centroid_weight_exponent: float = 3.0,
-    bounds: RadarImageBounds = YARLOVO_BOUNDS,
+    bounds: RadarImageBounds = SOFIA_MAP_BOUNDS,
 ) -> list[StormCell]:
     """Segment OPERA's native 1 km DBZH grid in the local Sofia map extent.
 
@@ -611,6 +635,7 @@ class OperaAnalysisResult:
     forecasted_tracks: int
     intersecting_target_tracks: int
     earliest_intersection_at: str | None
+    assessments: tuple[HailAssessment, ...]
     errors: tuple[str, ...]
 
 
@@ -723,7 +748,21 @@ class OperaAnalysisPipeline:
         state["confirmed_track_count"] = len(confirmed_tracks)
         state["pending_track_count"] = len(manager.tracks) - len(confirmed_tracks)
         state["forecasts"] = [forecast.as_dict() for forecast in forecasts]
-        state["hail_assessment"] = "disabled pending OPERA-specific hail calibration"
+        assessments = tuple(
+            assess_track(track, forecast, self.settings.severe_alert)
+            for track, forecast in zip(confirmed_tracks, forecasts)
+        )
+        self.archive.write_assessments(
+            [assessment.as_dict() for assessment in assessments],
+            self.settings.target.as_dict(),
+        )
+        state["severe_alert_policy"] = {
+            "minimum_dbz": self.settings.severe_alert.minimum_dbz,
+            "maximum_lead_minutes": self.settings.severe_alert.maximum_lead_minutes,
+            "minimum_trajectory_confidence": (
+                self.settings.severe_alert.minimum_trajectory_confidence
+            ),
+        }
         self.archive.write_opera_tracker_state(state)
         return OperaAnalysisResult(
             processed_frames=processed_frames,
@@ -733,12 +772,13 @@ class OperaAnalysisPipeline:
             forecasted_tracks=sum(item.available for item in forecasts),
             intersecting_target_tracks=len(intersections),
             earliest_intersection_at=earliest.isoformat() if earliest else None,
+            assessments=assessments,
             errors=tuple(errors),
         )
 
 
 class OperaIngestionService:
-    """Archive OPERA comparison data without feeding hail decisions or alerts."""
+    """Archive, track, assess, and alert from the primary OPERA composite."""
 
     def __init__(
         self,
@@ -746,11 +786,17 @@ class OperaIngestionService:
         archive: ArchiveStore,
         client: OperaClient,
         analysis: OperaAnalysisPipeline | None = None,
+        alert_lifecycle: AlertLifecycle | None = None,
+        telegram_notifier: TelegramNotifier | None = None,
     ):
         self.settings = settings
         self.archive = archive
         self.client = client
         self.analysis = analysis or OperaAnalysisPipeline(settings, archive)
+        self.alert_lifecycle = alert_lifecycle or AlertLifecycle(
+            archive, settings.alert_lifecycle.expiry
+        )
+        self.telegram_notifier = telegram_notifier
 
     def _write_error(self, fetched_at: datetime, error: Exception) -> OperaPollResult:
         self.archive.prune_frames_older_than(fetched_at - self.settings.frame_retention)
@@ -806,6 +852,24 @@ class OperaIngestionService:
         latest_is_archived = latest_frame is not None and self.archive.has_opera_raw_frame(latest_frame)
         latest_has_overlay = latest_frame is not None and self.archive.has_opera_overlay(latest_frame)
         analysis_result = self.analysis.process(frames)
+        alert_data_is_fresh = (
+            latest_is_archived
+            and latest_has_overlay
+            and latest_age_seconds is not None
+            and latest_age_seconds <= self.settings.opera_maximum_frame_age.total_seconds()
+            and not frame_errors
+            and not analysis_result.errors
+        )
+        alert_result = self.alert_lifecycle.reconcile(
+            [assessment.as_dict() for assessment in analysis_result.assessments],
+            evaluated_at=fetched_at,
+            data_is_fresh=alert_data_is_fresh,
+        )
+        delivery_result = (
+            self.telegram_notifier.deliver_pending(self.archive, now=fetched_at)
+            if self.telegram_notifier is not None and alert_data_is_fresh
+            else TelegramDeliveryResult()
+        )
         self.archive.prune_frames_older_than(fetched_at - self.settings.frame_retention)
         if not frames:
             state, error = "error", "OPERA response contains no DBZH composite links"
@@ -835,6 +899,18 @@ class OperaIngestionService:
             forecasted_tracks=analysis_result.forecasted_tracks,
             intersecting_target_tracks=analysis_result.intersecting_target_tracks,
             earliest_intersection_at=analysis_result.earliest_intersection_at,
+            severe_alert_candidates=sum(
+                assessment.candidate_level is not None
+                for assessment in analysis_result.assessments
+            ),
+            active_alerts=alert_result.active_alerts,
+            alert_transitions=len(alert_result.transitions),
+            notification_outbox_events=alert_result.outbox_events,
+            telegram_delivery_attempts=delivery_result.attempted,
+            telegram_deliveries=delivery_result.delivered,
+            telegram_delivery_failures=delivery_result.failed,
+            telegram_delivery_skipped_stale=delivery_result.skipped_stale,
+            alert_processing_deferred=alert_result.deferred_for_stale_data,
             analysis_errors=analysis_result.errors,
             error=error,
         )

@@ -299,9 +299,6 @@ function renderStatus(status) {
     "volumeAge",
     volumeFrame.observed_at ? liveAgeLabel(volumeFrame.observed_at, volume.latest_age_seconds) : volume.state || "Waiting",
   );
-  const yarlovo = status.yarlovo || {};
-  const yarlovoFrame = yarlovo.latest_cappi_frame || {};
-  setText("yarlovoAge", liveAgeLabel(yarlovoFrame.observed_at, yarlovo.latest_age_seconds));
   setText("trackCount", status.active_tracks ?? 0);
   setText("intersectionCount", status.intersecting_target_tracks ?? 0);
   setText("alertCount", status.active_alerts ?? 0);
@@ -320,6 +317,28 @@ function renderStatus(status) {
 
 function assessmentIndex(assessments) {
   return new Map((assessments.assessments || []).map((item) => [item.track_id, item]));
+}
+
+function distanceFromTargetKm(location, target) {
+  const latitude = Number(location?.latitude);
+  const longitude = Number(location?.longitude);
+  const targetLatitude = Number(target?.latitude);
+  const targetLongitude = Number(target?.longitude);
+  if (![latitude, longitude, targetLatitude, targetLongitude].every(Number.isFinite)) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const toRadians = (degrees) => degrees * Math.PI / 180;
+  const latitudeDelta = toRadians(targetLatitude - latitude);
+  const longitudeDelta = toRadians(targetLongitude - longitude);
+  const haversine = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(toRadians(latitude)) * Math.cos(toRadians(targetLatitude))
+    * Math.sin(longitudeDelta / 2) ** 2;
+  return 6_371 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+}
+
+function latestTrackLocation(track) {
+  return track.latest_centroid || track.points?.at(-1)?.centroid_location;
 }
 
 function renderVolumeProfile(volume, trackId) {
@@ -410,14 +429,21 @@ function volumeEchoTopLabel(sample) {
 function renderTracks(tracker, assessments, volume) {
   const index = assessmentIndex(assessments);
   const minimumConfirmations = tracker.minimum_confirmed_observations || 1;
+  const target = tracker.target || DEFAULT_TARGET;
   const tracks = (tracker.tracks || []).filter((track) =>
-    (track.point_count ?? track.points?.length ?? 0) >= minimumConfirmations);
+    (track.point_count ?? track.points?.length ?? 0) >= minimumConfirmations)
+    .sort((first, second) => {
+      const firstDistance = distanceFromTargetKm(latestTrackLocation(first), target);
+      const secondDistance = distanceFromTargetKm(latestTrackLocation(second), target);
+      if (firstDistance !== secondDistance) return firstDistance - secondDistance;
+      return String(first.track_id).localeCompare(String(second.track_id));
+    });
   const list = document.getElementById("trackList");
   if (!tracks.length) { list.innerHTML = '<p class="muted">No segmented cells have been tracked yet.</p>'; return; }
   list.innerHTML = tracks.map((track) => {
     const assessment = index.get(track.track_id) || {};
     const level = assessment.candidate_level || assessment.radar_signature || "OPERA observation";
-    const style = assessment.candidate_level === "Hail Warning" ? "warning" : assessment.candidate_level === "Hail Watch" ? "watch" : "";
+    const style = assessment.candidate_level === "Severe Reflectivity Alert" ? "severe" : "";
     const forecast = (tracker.forecasts || []).find((item) => item.track_id === track.track_id);
     const hasMotionVector = Number.isFinite(track.speed_kmh) && Number.isFinite(track.bearing_degrees);
     const motion = hasMotionVector
@@ -427,7 +453,7 @@ function renderTracks(tracker, assessments, volume) {
         : "Motion needs another observation";
     const arrival = forecast?.arrival_window_start ? `Target entry: ${dateLabel(forecast.arrival_window_start)}` : "No target intersection forecast";
     const projection = (forecast?.predicted_positions || []).map((position) => predictionLabel(position.lead_minutes)).join(", ") || "No motion projection";
-    const reason = (assessment.reasons || []).slice(-1)[0] || "OPERA maximum reflectivity; hail assessment is disabled pending calibration.";
+    const reason = (assessment.reasons || []).slice(-1)[0] || "OPERA maximum-reflectivity observation; no severe alert candidate.";
     const focused = focusedTrackId === track.track_id ? "is-focused" : "";
     return `<article class="track-card ${style} ${focused}" data-track-id="${escapeHtml(track.track_id)}" tabindex="0" role="button" aria-label="Focus the map on this storm track"><h3>${escapeHtml(level)}</h3><p>Current reflectivity: ${escapeHtml(currentDbzLabel(track))}</p><div class="observation-charts">${renderIntensityHistory(track)}${renderVerticalProfile(volume, track.track_id)}</div><p>${escapeHtml(motion)}</p><p>Projection: ${escapeHtml(projection)}</p><p>${escapeHtml(arrival)}</p><p class="reason">${escapeHtml(reason)}</p></article>`;
   }).join("");
@@ -437,10 +463,6 @@ function drawMap(status, tracker, cells, { displayFrame = null, historical = fal
   layers.clearLayers();
   mapTrackLocations.clear();
   const target = tracker.target || DEFAULT_TARGET;
-  const yarlovoFrame = status.yarlovo?.latest_cappi_frame;
-  if (!historical && yarlovoFrame?.filename) {
-    L.imageOverlay(`/frames/${encodeURIComponent(yarlovoFrame.filename)}`, RADAR_BOUNDS, { opacity: 0.36, interactive: false }).addTo(layers);
-  }
   const operaFrame = displayFrame || status.latest_dbzh_composite;
   if (operaFrame?.filename) {
     L.imageOverlay(`/opera/overlay/${encodeURIComponent(operaFrame.filename)}`, RADAR_BOUNDS, { opacity: 0.72, interactive: false }).addTo(layers);

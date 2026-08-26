@@ -1,2 +1,4 @@
 [console_scripts]
 hail-detector-poller = hail_detector.poller:main
+hail-detector-telegram-chat-id = hail_detector.telegram_chat_id:main
+hail-detector-telegram-test = hail_detector.telegram_test:main

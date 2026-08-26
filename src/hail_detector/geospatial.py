@@ -30,7 +30,7 @@ class PixelCoordinate:
 
 @dataclass(frozen=True)
 class RadarImageBounds:
-    """Leaflet image-overlay bounds published by the Yarlovo viewer."""
+    """Leaflet image-overlay bounds for the Sofia monitoring area."""
 
     south: float = 40.674
     west: float = 20.678
@@ -111,4 +111,4 @@ def _haversine_metres(first: LatLon, second: LatLon) -> float:
     return 2 * EARTH_RADIUS_M * asin(sqrt(a))
 
 
-YARLOVO_BOUNDS = RadarImageBounds()
+SOFIA_MAP_BOUNDS = RadarImageBounds()

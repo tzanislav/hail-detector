@@ -2,24 +2,26 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+import json
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import h5py
 import httpx
 
 from hail_detector.archive import ArchiveStore
-from hail_detector.config import Settings
-from hail_detector.calibration import DbzBand
+from hail_detector.config import Settings, TelegramSettings
 from hail_detector.geospatial import LatLon, PixelCoordinate
+from hail_detector.hail_policy import HailAssessment, SEVERE_ALERT_LEVEL
 from hail_detector.opera import (
+    OperaAnalysisResult,
     OperaClient,
     OperaIngestionService,
     parse_opera_composite_frames,
     qualify_opera_storm_cell,
     segment_opera_cells,
 )
-from hail_detector.storm_cells import PixelBounds, StormCell
+from hail_detector.storm_cells import DbzBand, PixelBounds, StormCell
+from hail_detector.telegram import TelegramNotifier
 
 
 OPERA_FILE = "OPERA@20260825T1055@0@DBZH.h5"
@@ -29,12 +31,7 @@ OPERA_URL = f"https://files.example.test/{OPERA_FILE}"
 def _settings(root: Path) -> Settings:
     return Settings(
         archive_root=root,
-        manifest_url="https://example.test/JAR.json",
-        source_timezone=ZoneInfo("Europe/Sofia"),
-        maximum_frame_age=timedelta(minutes=10),
         poll_interval_seconds=240,
-        segmentation_minimum_dbz=35,
-        segmentation_minimum_pixels=4,
         tracker_maximum_gap=timedelta(minutes=12),
         tracker_maximum_speed_kmh=160,
         opera_lookback=timedelta(minutes=70),
@@ -93,7 +90,7 @@ def _opera_hdf5(*, embedded_intense_core: bool = False) -> bytes:
             compression="gzip",
             fillvalue=-9999000.0,
         )
-        # These grid cells map into the existing Yarlovo/Sofia overlay bounds.
+        # These grid cells map into the configured Sofia overlay bounds.
         data[3350:3380, 3020:3060] = 35.0 if embedded_intense_core else 64.0
         if embedded_intense_core:
             # Keep the component connected while placing its strongest core
@@ -199,3 +196,63 @@ def test_opera_service_archives_and_renders_a_comparison_overlay(tmp_path: Path)
     cells_path = archive.opera_cells_dir / f"{OPERA_FILE}.json"
     assert '"area_square_km": 1200.0' in cells_path.read_text(encoding="utf-8")
     assert '"rejected_cells": []' in cells_path.read_text(encoding="utf-8")
+
+
+def test_opera_service_delivers_a_fresh_severe_alert(tmp_path: Path) -> None:
+    coverage = _coverage_payload()
+    hdf5 = _opera_hdf5()
+    sent_payloads: list[dict[str, object]] = []
+
+    def opera_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.example.test":
+            return httpx.Response(200, json=coverage)
+        if str(request.url) == OPERA_URL:
+            return httpx.Response(200, content=hdf5)
+        return httpx.Response(404)
+
+    def telegram_handler(request: httpx.Request) -> httpx.Response:
+        sent_payloads.append(json.loads(request.content))
+        return httpx.Response(200, json={"ok": True})
+
+    class AlertingAnalysis:
+        def process(self, _frames):
+            assessment = HailAssessment(
+                source="eumetnet_opera_dbzh_maximum_reflectivity",
+                track_id="track-000001",
+                radar_signature="severe_reflectivity_signature",
+                confidence="high",
+                candidate_level=SEVERE_ALERT_LEVEL,
+                max_dbz_band=(65, 70),
+                projected_target_intersection=True,
+                minutes_to_arrival=20,
+                reasons=("qualifying test assessment",),
+            )
+            return OperaAnalysisResult(
+                processed_frames=1,
+                segmented_cells=1,
+                qualified_storm_cells=1,
+                active_tracks=1,
+                forecasted_tracks=1,
+                intersecting_target_tracks=1,
+                earliest_intersection_at="2026-08-25T11:15:00+00:00",
+                assessments=(assessment,),
+                errors=(),
+            )
+
+    settings = _settings(tmp_path)
+    archive = ArchiveStore(tmp_path)
+    with httpx.Client(transport=httpx.MockTransport(opera_handler)) as opera_http:
+        client = OperaClient("https://api.example.test/opera", settings.opera_lookback, opera_http)
+        with httpx.Client(transport=httpx.MockTransport(telegram_handler)) as telegram_http:
+            notifier = TelegramNotifier(
+                TelegramSettings(enabled=True, bot_token="test-token", chat_id="12345"),
+                telegram_http,
+            )
+            result = OperaIngestionService(
+                settings, archive, client, analysis=AlertingAnalysis(), telegram_notifier=notifier
+            ).poll_once(datetime(2026, 8, 25, 11, 0, tzinfo=timezone.utc))
+
+    assert result.severe_alert_candidates == 1
+    assert result.telegram_deliveries == 1
+    assert sent_payloads[0]["chat_id"] == "12345"
+    assert "Severe Reflectivity Alert" in str(sent_payloads[0]["text"])

@@ -11,15 +11,26 @@ Requires-Dist: httpx<1,>=0.28
 Requires-Dist: numpy<3,>=1.26
 Requires-Dist: pillow<13,>=10
 Requires-Dist: pyproj<4,>=3.6
+Requires-Dist: python-dotenv<2,>=1.0
 Requires-Dist: uvicorn[standard]<1,>=0.30
 Provides-Extra: dev
 Requires-Dist: pytest<10,>=8; extra == "dev"
 
 # Hail detector
 
-This repository currently implements the **Yarlovo radar ingestion and calibration** milestone. It does not yet track storms or send alerts.
+This service monitors the EUMETNET **OPERA DBZH maximum-reflectivity composite** around Sofia. It archives native ODIM HDF5 composites, segments and tracks significant reflectivity cells, projects confirmed tracks through a fixed target radius, and can send a Telegram alert for a severe approaching signature.
 
-The service fetches the public Yarlovo manifest, accepts only CAPPI frame filenames, preserves original PNGs, checks feed age conservatively, records a dBZ-band calibration summary, segments significant radar cores, and links those cells into storm tracks. It does not yet forecast track arrival or issue alerts. The source investigation and collected fixtures are in [`research/yarlovo-radar-investigation.md`](research/yarlovo-radar-investigation.md).
+The optional Craiova OPERA polar-volume feed provides an experimental vertical DBZH profile for each confirmed primary track. It is displayed for context only and never changes the track, projection, or alert decision.
+
+## Alert rule
+
+Telegram delivery is enabled only for a fresh OPERA composite when all of these hold:
+
+- a confirmed track has a maximum observed band of at least **65 dBZ**;
+- its medium-or-higher confidence fitted trajectory enters the configured target radius within **30 minutes** (including immediate entry);
+- all current-frame archival, rendering, and analysis steps succeeded.
+
+This is a severe-reflectivity signature, not confirmation of hail and not an official weather warning. Transitions are deduplicated per track, and alerts expire only after 20 minutes of fresh non-qualifying data.
 
 ## Run locally
 
@@ -34,42 +45,29 @@ Use two processes in separate terminals:
 .\.venv\Scripts\uvicorn.exe hail_detector.api:app --app-dir src --reload
 ```
 
-The debug dashboard is at `http://127.0.0.1:8000/`. The status API is at `http://127.0.0.1:8000/status`; `/tracks` exposes the persisted cell-track state; `/health` returns HTTP 503 until a fresh valid CAPPI frame has been archived.
-
-The dashboard uses Leaflet and OpenStreetMap tiles to display the original transparent radar PNG over its published bounds, the configured target radius, segmented cells, tracks, projections, assessments, and alert lifecycle. A stale feed is intentionally shown as a prominent amber warning, not as a healthy live detection view.
+The debug dashboard is at `http://127.0.0.1:8000/`. `GET /health` returns HTTP 503 until a fresh primary composite has been archived and analysed. `GET /tracks`, `/assessments`, and `/alerts` expose the current OPERA state.
 
 ## Configuration
 
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
-| `HAIL_ARCHIVE_DIR` | `var/radar` | Runtime archive location. |
-| `HAIL_MANIFEST_URL` | Yarlovo active JSON manifest | Override only for testing or a verified source change. |
-| `HAIL_SOURCE_TIMEZONE` | `Europe/Sofia` | Timezone applied to the source filename timestamp. This fails safely if the source's timezone remains uncertain. |
-| `HAIL_MAX_FRAME_AGE_MINUTES` | `10` | A newer valid CAPPI frame is required for a `ready` status. |
-| `HAIL_POLL_INTERVAL_SECONDS` | `240` | Poll cadence. |
-| `HAIL_SEGMENT_MINIMUM_DBZ` | `35` | Lower dBZ bound required to include a validated pixel in a storm cell. |
-| `HAIL_SEGMENT_MINIMUM_PIXELS` | `4` | Smallest retained 8-connected cell. |
-| `HAIL_TRACKER_MAXIMUM_GAP_MINUTES` | `12` | Longest gap over which a cell can retain its storm-track ID. |
-| `HAIL_TRACKER_MAXIMUM_SPEED_KMH` | `160` | Association speed gate; this is not a weather forecast. |
-| `HAIL_TARGET_LATITUDE` / `HAIL_TARGET_LONGITUDE` | Sofia centre (`42.6977`, `23.3219`) | Development defaults for the fixed target. Set these to the actual protected location before alerts are built. |
-| `HAIL_WARNING_RADIUS_KM` | `10` | Target-radius intersection used by the projection layer. |
-| `HAIL_FORECAST_HORIZON_MINUTES` | `90` | Maximum constant-velocity projection horizon. |
-| `HAIL_HIGH_DBZ_CALIBRATION_VALIDATED` | `false` | Safety gate: candidate Watches/Warnings remain suppressed until real 55+ dBZ PNG colours are verified. |
-| `HAIL_WATCH_MINIMUM_DBZ` / `HAIL_WARNING_MINIMUM_DBZ` / `HAIL_SEVERE_MINIMUM_DBZ` | `55` / `60` / `65` | Conservative lower-bound dBZ thresholds for the provisional radar-signature policy. |
-| `HAIL_ALERT_EXPIRY_MINUTES` | `20` | Fresh non-qualifying observations required before an active candidate alert expires. Stale data never expires alerts. |
+| `HAIL_OPERA_ENABLED` | `true` | Enable the primary OPERA DBZH composite poller. |
+| `HAIL_OPERA_LOOKBACK_MINUTES` / `HAIL_OPERA_MAX_FRAME_AGE_MINUTES` | `70` / `15` | Recent archive window and freshness requirement. |
+| `HAIL_OPERA_SEGMENT_MINIMUM_DBZ` / `HAIL_OPERA_SEGMENT_MINIMUM_PIXELS` | `35` / `2` | Sensitive raw-component segmentation threshold. |
+| `HAIL_OPERA_STORM_MIN_AREA_SQUARE_KM` / `HAIL_OPERA_STORM_MIN_45DBZ_CORE_SQUARE_KM` | `30` / `8` | Broad-cell operational tracking gate. |
+| `HAIL_OPERA_STORM_MIN_55DBZ_CORE_SQUARE_KM` | `1` | Compact-core exception to the broad-cell gate. |
+| `HAIL_OPERA_TRACK_MINIMUM_CONFIRMATIONS` | `2` | Observations required before a track is operationally confirmed. |
+| `HAIL_TARGET_LATITUDE` / `HAIL_TARGET_LONGITUDE` / `HAIL_WARNING_RADIUS_KM` | Sofia centre / `10` | Fixed protected location and radius. |
+| `HAIL_SEVERE_MINIMUM_DBZ` / `HAIL_SEVERE_MAXIMUM_LEAD_MINUTES` | `65` / `30` | Telegram severe-reflectivity threshold and maximum target-entry lead time. |
+| `HAIL_MINIMUM_TRAJECTORY_CONFIDENCE` | `medium` | Lowest allowed fitted-track confidence: `low`, `medium`, or `high`. |
+| `HAIL_ALERT_EXPIRY_MINUTES` | `20` | Fresh non-qualifying period before an active alert expires. |
+| `HAIL_OPERA_VOLUME_ENABLED` | `true` | Enable the optional Craiova volume-profile feed. It cannot affect alerts. |
+| `HAIL_TELEGRAM_ENABLED` | `false` | Enable Telegram delivery of eligible OPERA alert transitions. |
+| `HAIL_TELEGRAM_BOT_TOKEN` / `HAIL_TELEGRAM_CHAT_ID` | unset | Required when Telegram is enabled. Keep the token secret. |
+| `HAIL_ENV_FILE` | `.env` | Optional dotenv path; process environment values take precedence. |
 
-Runtime files under `var/` are intentionally ignored by Git. The poller stores original frames, source-manifest snapshots, per-frame calibration summaries, storm-cell analyses, persistent track state, assessments, alert decision audits, and a file-based notification outbox there.
-
-## Verification
+## Verify
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
-
-The tests use the saved Yarlovo frames and do not call the live radar endpoint.
-
-## Safety boundary
-
-This milestone returns observed **radar reflectivity bands**, not confirmed hail. It now also exposes a short-horizon constant-velocity radar-track projection and provisional Watch/Warning *candidates*, clearly separate from a meteorological forecast or official warning. High-end (50+ dBZ) raw colours have not yet been validated from an active-convection capture, so candidates are deliberately suppressed until that safety gate is opened.
-
-The notification layer currently writes transition events to a local file outbox only. It deduplicates unchanged candidates, escalates a Watch to a Warning, records de-escalation/expiry, and refuses to mutate state when data is stale. An external channel such as Telegram will be added only after its credentials and delivery policy are chosen.
