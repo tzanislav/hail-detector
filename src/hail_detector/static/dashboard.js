@@ -302,6 +302,15 @@ function renderStatus(status) {
   setText("trackCount", status.active_tracks ?? 0);
   setText("intersectionCount", status.intersecting_target_tracks ?? 0);
   setText("alertCount", status.active_alerts ?? 0);
+  const telegramAlerts = status.telegram_alerts || {};
+  const telegramState = telegramAlerts.state || "checking";
+  const telegramStatus = document.getElementById("telegramAlertStatus");
+  telegramStatus.className = `telegram-alert-status ${telegramState}`;
+  setText(
+    "telegramAlertStatus",
+    telegramState === "active" ? "ACTIVE" : telegramState === "paused" ? "PAUSED" : telegramState === "disabled" ? "OFF" : "CHECKING",
+  );
+  setText("telegramAlertDetail", telegramAlerts.message || "Checking alert readiness");
   const notice = document.getElementById("staleNotice");
   if (state !== "ready") {
     notice.classList.remove("hidden");

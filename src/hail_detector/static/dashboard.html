@@ -10,7 +10,7 @@
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/static/dashboard.css?v=opera-only" />
+    <link rel="stylesheet" href="/static/dashboard.css?v=opera-alert-status" />
   </head>
   <body>
     <main class="dashboard-shell">
@@ -68,6 +68,7 @@
           <div class="status-item"><span>Tracked cells</span><strong id="trackCount">--</strong></div>
           <div class="status-item"><span>Target intersections</span><strong id="intersectionCount">--</strong></div>
           <div class="status-item"><span>Active alerts</span><strong id="alertCount">--</strong></div>
+          <div class="status-item status-item--telegram"><span>Telegram alerts</span><strong id="telegramAlertStatus" class="telegram-alert-status">Checking</strong><small id="telegramAlertDetail">Checking alert readiness</small></div>
           <div class="status-source"><span>Primary source</span><strong id="sourceSummary">Waiting for OPERA data</strong></div>
           <span id="stateBadge" class="badge">Loading</span>
         </div>
@@ -108,6 +109,6 @@
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
-    <script src="/static/dashboard.js?v=opera-only"></script>
+    <script src="/static/dashboard.js?v=opera-alert-status"></script>
   </body>
 </html>

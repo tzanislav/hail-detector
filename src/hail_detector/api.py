@@ -25,6 +25,41 @@ def _safe_filename(filename: str) -> str:
     return filename
 
 
+def _telegram_alert_status(settings: Settings, current: dict[str, object]) -> dict[str, object]:
+    """Return a safe, user-facing summary of Telegram alert readiness."""
+
+    criteria = {
+        "minimum_dbz": settings.severe_alert.minimum_dbz,
+        "maximum_lead_minutes": settings.severe_alert.maximum_lead_minutes,
+        "minimum_trajectory_confidence": (
+            settings.severe_alert.minimum_trajectory_confidence
+        ),
+    }
+    if not settings.telegram.enabled:
+        return {
+            "configured": False,
+            "active": False,
+            "state": "disabled",
+            "message": "Telegram alerts are turned off.",
+            "criteria": criteria,
+        }
+    if bool(current.get("alert_processing_deferred", True)):
+        return {
+            "configured": True,
+            "active": False,
+            "state": "paused",
+            "message": "Telegram is configured; alerts resume after a fresh OPERA cycle.",
+            "criteria": criteria,
+        }
+    return {
+        "configured": True,
+        "active": True,
+        "state": "active",
+        "message": "Matching OPERA storms will send a Telegram alert.",
+        "criteria": criteria,
+    }
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_environment()
     archive = ArchiveStore(settings.archive_root)
@@ -50,6 +85,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         )
         current["primary_source"] = "eumetnet_opera_dbzh_maximum_reflectivity"
+        current["telegram_alerts"] = _telegram_alert_status(settings, current)
         current["volume"] = archive.read_opera_volume_status() or {
             "state": "starting" if settings.opera_volume_enabled else "disabled",
             "experimental": True,

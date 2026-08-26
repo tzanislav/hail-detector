@@ -9,7 +9,7 @@ import httpx
 
 from hail_detector.api import create_app
 from hail_detector.archive import ArchiveStore
-from hail_detector.config import Settings
+from hail_detector.config import Settings, TelegramSettings
 from hail_detector.models import RadarFrame
 
 
@@ -99,9 +99,12 @@ def test_manual_opera_fetch_reports_when_ingestion_is_disabled(tmp_path: Path) -
 
 
 def test_opera_readiness_and_alert_state_are_exposed(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
+    settings = replace(
+        _settings(tmp_path),
+        telegram=TelegramSettings(enabled=True, bot_token="test-token", chat_id="123"),
+    )
     archive = ArchiveStore(tmp_path)
-    archive.write_opera_status({"state": "ready"})
+    archive.write_opera_status({"state": "ready", "alert_processing_deferred": False})
     archive.write_alert_state({"records": [{"track_id": "track-001"}]})
     app = create_app(settings)
 
@@ -110,7 +113,31 @@ def test_opera_readiness_and_alert_state_are_exposed(tmp_path: Path) -> None:
 
     assert health.status_code == 200
     assert health.json()["primary_source"] == "eumetnet_opera_dbzh_maximum_reflectivity"
+    assert health.json()["telegram_alerts"] == {
+        "configured": True,
+        "active": True,
+        "state": "active",
+        "message": "Matching OPERA storms will send a Telegram alert.",
+        "criteria": {
+            "minimum_dbz": 65,
+            "maximum_lead_minutes": 30,
+            "minimum_trajectory_confidence": "medium",
+        },
+    }
     assert alerts.json()["records"] == [{"track_id": "track-001"}]
+
+
+def test_status_shows_telegram_alerts_paused_until_a_fresh_opera_cycle(tmp_path: Path) -> None:
+    settings = replace(
+        _settings(tmp_path),
+        telegram=TelegramSettings(enabled=True, bot_token="test-token", chat_id="123"),
+    )
+    app = create_app(settings)
+
+    response = asyncio.run(_get(app, "/status"))
+
+    assert response.json()["telegram_alerts"]["state"] == "paused"
+    assert response.json()["telegram_alerts"]["active"] is False
 
 
 def test_dashboard_and_opera_archive_endpoints_are_available(tmp_path: Path) -> None:
@@ -130,6 +157,7 @@ def test_dashboard_and_opera_archive_endpoints_are_available(tmp_path: Path) -> 
 
     assert dashboard.status_code == 200
     assert "Hail detector" in dashboard.text
+    assert 'id="telegramAlertStatus"' in dashboard.text
     assert overlay.content == b"opera-overlay"
     assert cells.json()["cells"] == [{"cell_id": "cell-001"}]
     assert history.json()["frames"] == [
