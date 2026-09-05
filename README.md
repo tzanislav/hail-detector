@@ -41,6 +41,8 @@ The debug dashboard is at `http://127.0.0.1:8000/`. `GET /health` returns HTTP 5
 
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
+| `HAIL_POLL_INTERVAL_SECONDS` | `1800` | Standard automatic polling interval (30 minutes). |
+| `HAIL_NEARBY_TRACK_POLL_INTERVAL_SECONDS` / `HAIL_NEARBY_TRACK_DISTANCE_KM` / `HAIL_NEARBY_TRACK_HOLD_UPDATES` | `600` / `100` / `5` | A fresh track within 100 km of the protected-circle edge temporarily switches automatic primary and volume updates to 10 minutes for the next five updates. |
 | `HAIL_OPERA_ENABLED` | `true` | Enable the primary OPERA DBZH composite poller. |
 | `HAIL_OPERA_LOOKBACK_MINUTES` / `HAIL_OPERA_MAX_FRAME_AGE_MINUTES` | `70` / `15` | Recent archive window and freshness requirement. |
 | `HAIL_OPERA_SEGMENT_MINIMUM_DBZ` / `HAIL_OPERA_SEGMENT_MINIMUM_PIXELS` | `35` / `2` | Sensitive raw-component segmentation threshold. |
@@ -67,3 +69,22 @@ The debug dashboard is at `http://127.0.0.1:8000/`. `GET /health` returns HTTP 5
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
+
+## Deploy to EC2
+
+From Windows, [deploy.ps1](deploy.ps1) packages the tracked and non-ignored
+working tree (including uncommitted changes), uploads it with the configured
+EC2 PEM key, rebuilds the remote virtual environment, runs tests, and restarts
+the API and poller. It uses the existing `hail-detector-api.service` and
+`hail-detector-poller.service` systemd units when present, otherwise it uses
+`start.sh`. It replaces all remote application files while preserving the
+server's `.env` file.
+
+```powershell
+.\deploy.ps1 -RemotePath /home/ubuntu/hail-detector
+```
+
+The default destination is `ubuntu@ec2-54-76-118-84.eu-west-1.compute.amazonaws.com`.
+Set `-RemoteHost` or `-RemoteUser` only when deploying elsewhere; provide the
+actual deployed application directory in `-RemotePath`. Add `-SkipTests` only
+when an emergency deployment cannot wait for the remote test suite.

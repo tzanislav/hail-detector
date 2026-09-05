@@ -40,6 +40,7 @@ class ArchiveStore:
         self.opera_metadata_dir = self.opera_dir / "metadata"
         self.opera_overlays_dir = self.opera_dir / "overlays"
         self.opera_status_dir = self.opera_dir / "status"
+        self.opera_polling_dir = self.opera_dir / "polling"
         self.opera_cells_dir = self.opera_dir / "cells"
         self.opera_tracks_dir = self.opera_dir / "tracks"
         self.opera_volume_dir = self.opera_dir / "volume"
@@ -391,6 +392,15 @@ class ArchiveStore:
 
     def read_opera_status(self) -> dict[str, Any] | None:
         path = self.opera_status_dir / "latest.json"
+        if not path.is_file():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def write_opera_polling_state(self, state: dict[str, Any]) -> None:
+        self._atomic_write(self.opera_polling_dir / "state.json", self._json_bytes(state))
+
+    def read_opera_polling_state(self) -> dict[str, Any] | None:
+        path = self.opera_polling_dir / "state.json"
         if not path.is_file():
             return None
         return json.loads(path.read_text(encoding="utf-8"))

@@ -115,6 +115,11 @@ def test_opera_readiness_and_alert_state_are_exposed(tmp_path: Path) -> None:
 
     assert health.status_code == 200
     assert health.json()["primary_source"] == "eumetnet_opera_dbzh_maximum_reflectivity"
+    assert health.json()["polling"] == {
+        "mode": "standard",
+        "next_poll_interval_seconds": 240,
+        "standard_poll_interval_seconds": 240,
+    }
     assert health.json()["telegram_alerts"] == {
         "configured": True,
         "active": True,

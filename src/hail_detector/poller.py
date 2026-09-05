@@ -5,6 +5,7 @@ import logging
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
+from .adaptive_polling import AdaptivePollingCadence
 from .archive import ArchiveStore
 from .config import Settings
 from .hail_risk_agent import HailRiskAgent
@@ -20,6 +21,7 @@ def main() -> None:
     )
     settings = Settings.from_environment()
     archive = ArchiveStore(settings.archive_root)
+    cadence = AdaptivePollingCadence(settings, archive)
     telegram_notifier = (
         TelegramNotifier(settings.telegram) if settings.telegram.enabled else None
     )
@@ -55,13 +57,35 @@ def main() -> None:
         else None
     )
 
+    scheduler = BlockingScheduler(timezone=timezone.utc)
+    scheduled_interval_seconds = settings.poll_interval_seconds
+
     def poll_sources() -> None:
+        nonlocal scheduled_interval_seconds
         if opera_service is not None:
-            opera_service.poll_once()
+            primary_result = opera_service.poll_once()
+            next_cadence = cadence.record_automatic_primary_poll(
+                primary_data_is_fresh=(
+                    primary_result.state == "ready" and primary_result.analyzed_frames > 0
+                )
+            )
+            if next_cadence.interval_seconds != scheduled_interval_seconds:
+                scheduler.reschedule_job(
+                    "opera-poll",
+                    trigger="interval",
+                    seconds=next_cadence.interval_seconds,
+                )
+                scheduled_interval_seconds = next_cadence.interval_seconds
+            logging.getLogger(__name__).info(
+                "OPERA polling cadence: %s; next update in %s minutes; "
+                "%s rapid updates retained",
+                next_cadence.mode,
+                next_cadence.interval_seconds // 60,
+                next_cadence.rapid_updates_remaining,
+            )
         if volume_service is not None:
             volume_service.poll_once()
 
-    scheduler = BlockingScheduler(timezone=timezone.utc)
     if opera_service is not None or volume_service is not None:
         scheduler.add_job(
             poll_sources,
