@@ -166,6 +166,9 @@ class Settings:
     poll_interval_seconds: int
     tracker_maximum_gap: timedelta
     tracker_maximum_speed_kmh: int
+    nearby_track_poll_interval_seconds: int = 600
+    nearby_track_distance_km: float = 100.0
+    nearby_track_hold_updates: int = 5
     frame_retention: timedelta = timedelta(hours=24)
     tracker_motion_window_observations: int = 5
     target: TargetLocation = field(default_factory=TargetLocation)
@@ -199,12 +202,21 @@ class Settings:
         load_dotenv(environment_file, override=False)
         return cls(
             archive_root=Path(os.getenv("HAIL_ARCHIVE_DIR", "var/radar")),
-            poll_interval_seconds=_positive_int("HAIL_POLL_INTERVAL_SECONDS", 240),
+            poll_interval_seconds=_positive_int("HAIL_POLL_INTERVAL_SECONDS", 1_800),
             tracker_maximum_gap=timedelta(
                 minutes=_positive_int("HAIL_TRACKER_MAXIMUM_GAP_MINUTES", 12)
             ),
             tracker_maximum_speed_kmh=_positive_int(
                 "HAIL_TRACKER_MAXIMUM_SPEED_KMH", 160
+            ),
+            nearby_track_poll_interval_seconds=_positive_int(
+                "HAIL_NEARBY_TRACK_POLL_INTERVAL_SECONDS", 600
+            ),
+            nearby_track_distance_km=_positive_float(
+                "HAIL_NEARBY_TRACK_DISTANCE_KM", 100.0
+            ),
+            nearby_track_hold_updates=_positive_int(
+                "HAIL_NEARBY_TRACK_HOLD_UPDATES", 5
             ),
             frame_retention=timedelta(
                 hours=_positive_int("HAIL_FRAME_RETENTION_HOURS", 24)

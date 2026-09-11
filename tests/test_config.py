@@ -20,6 +20,10 @@ def test_settings_load_opera_alert_and_telegram_configuration_from_dotenv(
         "OPENAI_API_KEY",
         "HAIL_LLM_ALERT_THRESHOLD",
         "HAIL_LLM_REASONING_EFFORT",
+        "HAIL_POLL_INTERVAL_SECONDS",
+        "HAIL_NEARBY_TRACK_POLL_INTERVAL_SECONDS",
+        "HAIL_NEARBY_TRACK_DISTANCE_KM",
+        "HAIL_NEARBY_TRACK_HOLD_UPDATES",
     ):
         monkeypatch.delenv(name, raising=False)
     (tmp_path / ".env").write_text(
@@ -45,3 +49,7 @@ def test_settings_load_opera_alert_and_telegram_configuration_from_dotenv(
     assert settings.hail_risk_agent.enabled is True
     assert settings.hail_risk_agent.alert_threshold == 8
     assert settings.hail_risk_agent.reasoning_effort == "high"
+    assert settings.poll_interval_seconds == 1_800
+    assert settings.nearby_track_poll_interval_seconds == 600
+    assert settings.nearby_track_distance_km == 100
+    assert settings.nearby_track_hold_updates == 5

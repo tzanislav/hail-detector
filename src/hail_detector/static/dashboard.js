@@ -346,6 +346,39 @@ function distanceFromTargetKm(location, target) {
   return 6_371 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 }
 
+function distanceFromProtectedAreaKm(location, target) {
+  const centreDistance = distanceFromTargetKm(location, target);
+  const radius = Number(target?.warning_radius_km);
+  if (!Number.isFinite(centreDistance)) return Number.POSITIVE_INFINITY;
+  return Number.isFinite(radius) && radius > 0 ? Math.max(0, centreDistance - radius) : centreDistance;
+}
+
+function directionFromProtectedArea(location, target) {
+  const latitude = Number(location?.latitude);
+  const longitude = Number(location?.longitude);
+  const targetLatitude = Number(target?.latitude);
+  const targetLongitude = Number(target?.longitude);
+  if (![latitude, longitude, targetLatitude, targetLongitude].every(Number.isFinite)) return "Unavailable";
+  if (distanceFromTargetKm(location, target) < 0.1) return "At zone centre";
+
+  const toRadians = (degrees) => degrees * Math.PI / 180;
+  const longitudeDelta = toRadians(longitude - targetLongitude);
+  const targetLatitudeRadians = toRadians(targetLatitude);
+  const latitudeRadians = toRadians(latitude);
+  const x = Math.sin(longitudeDelta) * Math.cos(latitudeRadians);
+  const y = Math.cos(targetLatitudeRadians) * Math.sin(latitudeRadians)
+    - Math.sin(targetLatitudeRadians) * Math.cos(latitudeRadians) * Math.cos(longitudeDelta);
+  const bearing = (Math.atan2(x, y) * 180 / Math.PI + 360) % 360;
+  const compass = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  return `${compass[Math.round(bearing / 45) % compass.length]} of protected zone`;
+}
+
+function protectedAreaDistanceLabel(location, target) {
+  const distance = distanceFromProtectedAreaKm(location, target);
+  if (!Number.isFinite(distance)) return "Unavailable";
+  return distance === 0 ? "Inside protected zone" : `${distance.toFixed(distance < 10 ? 1 : 0)} km from protected zone`;
+}
+
 function latestTrackLocation(track) {
   return track.latest_centroid || track.points?.at(-1)?.centroid_location;
 }
@@ -442,8 +475,8 @@ function renderTracks(tracker, assessments, volume) {
   const tracks = (tracker.tracks || []).filter((track) =>
     (track.point_count ?? track.points?.length ?? 0) >= minimumConfirmations)
     .sort((first, second) => {
-      const firstDistance = distanceFromTargetKm(latestTrackLocation(first), target);
-      const secondDistance = distanceFromTargetKm(latestTrackLocation(second), target);
+      const firstDistance = distanceFromProtectedAreaKm(latestTrackLocation(first), target);
+      const secondDistance = distanceFromProtectedAreaKm(latestTrackLocation(second), target);
       if (firstDistance !== secondDistance) return firstDistance - secondDistance;
       return String(first.track_id).localeCompare(String(second.track_id));
     });
@@ -451,6 +484,9 @@ function renderTracks(tracker, assessments, volume) {
   if (!tracks.length) { list.innerHTML = '<p class="muted">No segmented cells have been tracked yet.</p>'; return; }
   list.innerHTML = tracks.map((track) => {
     const assessment = index.get(track.track_id) || {};
+    const location = latestTrackLocation(track);
+    const distance = protectedAreaDistanceLabel(location, target);
+    const direction = directionFromProtectedArea(location, target);
     const level = assessment.candidate_level || assessment.radar_signature || "OPERA observation";
     const style = assessment.candidate_level === "Severe Reflectivity Alert" ? "severe" : "";
     const forecast = (tracker.forecasts || []).find((item) => item.track_id === track.track_id);
@@ -471,7 +507,7 @@ function renderTracks(tracker, assessments, volume) {
     const agentConfigured = dashboardData?.status?.hail_risk_agent?.configured === true;
     const testControl = `<button class="track-test-button" type="button" data-track-id="${escapeHtml(track.track_id)}" ${agentConfigured ? "" : "disabled"} title="Runs a test-only web-researched assessment and logs the result in this browser's console">Test hail-risk agent</button>`;
     const focused = focusedTrackId === track.track_id ? "is-focused" : "";
-    return `<article class="track-card ${style} ${focused}" data-track-id="${escapeHtml(track.track_id)}" tabindex="0" role="button" aria-label="Focus the map on this storm track"><h3>${escapeHtml(level)}</h3><p>Current reflectivity: ${escapeHtml(currentDbzLabel(track))}</p><div class="observation-charts">${renderIntensityHistory(track)}${renderVerticalProfile(volume, track.track_id)}</div><p>${escapeHtml(motion)}</p><p>Projection: ${escapeHtml(projection)}</p><p>${escapeHtml(arrival)}</p>${researchDetail}<p class="reason">${escapeHtml(reason)}</p>${testControl}</article>`;
+    return `<article class="track-card ${style} ${focused}" data-track-id="${escapeHtml(track.track_id)}" tabindex="0" role="button" aria-label="Focus the map on this storm track"><h3>${escapeHtml(level)}</h3><p>Current reflectivity: ${escapeHtml(currentDbzLabel(track))}</p><dl class="track-metrics"><div><dt>Distance</dt><dd>${escapeHtml(distance)}</dd></div><div><dt>Direction</dt><dd>${escapeHtml(direction)}</dd></div></dl><div class="observation-charts">${renderIntensityHistory(track)}${renderVerticalProfile(volume, track.track_id)}</div><p>${escapeHtml(motion)}</p><p>Projection: ${escapeHtml(projection)}</p><p>${escapeHtml(arrival)}</p>${researchDetail}<p class="reason">${escapeHtml(reason)}</p>${testControl}</article>`;
   }).join("");
 }
 

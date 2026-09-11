@@ -220,6 +220,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         )
         current["primary_source"] = "eumetnet_opera_dbzh_maximum_reflectivity"
+        current["polling"] = archive.read_opera_polling_state() or {
+            "mode": "standard",
+            "next_poll_interval_seconds": settings.poll_interval_seconds,
+            "standard_poll_interval_seconds": settings.poll_interval_seconds,
+        }
         current["telegram_alerts"] = _telegram_alert_status(settings, current)
         current["hail_risk_agent"] = _hail_risk_agent_status(settings, current)
         current["volume"] = archive.read_opera_volume_status() or {
