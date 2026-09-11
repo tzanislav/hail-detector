@@ -1,0 +1,20 @@
+[Unit]
+Description=Hail detector OPERA poller
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/hail-detector
+Environment=HAIL_ARCHIVE_DIR=/home/ubuntu/hail-detector/var/radar
+Environment=PYTHONUNBUFFERED=1
+ExecStartPre=/usr/bin/mkdir -p /home/ubuntu/hail-detector/var/radar
+ExecStart=/home/ubuntu/hail-detector/.venv/bin/python -m hail_detector.poller
+Restart=always
+RestartSec=10
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

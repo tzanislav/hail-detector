@@ -37,6 +37,37 @@ Use two processes in separate terminals:
 
 The debug dashboard is at `http://127.0.0.1:8000/`. `GET /health` returns HTTP 503 until a fresh primary composite has been archived and analysed. `GET /tracks`, `/assessments`, and `/alerts` expose the current OPERA state.
 
+## Run automatically on Ubuntu/EC2
+
+The two systemd unit files in `deploy/systemd/` start the API and poller at
+boot and restart either process if it exits. They assume the app is installed
+at `/home/ubuntu/hail-detector` and runs as the `ubuntu` user, matching the
+EC2 deployment. If your path or user differs, update those values first.
+
+After deploying this version to the instance, stop any manually launched copy
+of the app and install the units. Check `run/api.pid` and `run/poller.pid`
+with `ps` first; if either process is still running, stop that specific
+reported PID before enabling the corresponding service.
+
+```bash
+cd ~/hail-detector
+sudo install -m 0644 deploy/systemd/hail-detector-api.service /etc/systemd/system/
+sudo install -m 0644 deploy/systemd/hail-detector-poller.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hail-detector-api.service hail-detector-poller.service
+```
+
+Check the services and their live logs with:
+
+```bash
+systemctl status hail-detector-api hail-detector-poller
+journalctl -u hail-detector-api -u hail-detector-poller -f
+```
+
+The services read the existing `.env` automatically through the application
+configuration. Do not use `start.sh` after systemd takes over; it is only for
+the manual, background-process deployment mode.
+
 ## Configuration
 
 | Environment variable | Default | Meaning |
