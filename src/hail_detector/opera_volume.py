@@ -149,11 +149,14 @@ class OperaVolumeClient:
         api_url: str,
         lookback: timedelta,
         client: httpx.Client | None = None,
+        *,
+        api_key: str | None = None,
     ):
         self.api_url = api_url
         self.lookback = lookback
         self._client = client or httpx.Client(timeout=60.0, follow_redirects=True)
         self._owns_client = client is None
+        self._headers = {"apikey": api_key} if api_key else {}
 
     def close(self) -> None:
         if self._owns_client:
@@ -173,6 +176,7 @@ class OperaVolumeClient:
         start = fetched_at - self.lookback
         response = self._client.get(
             self.api_url,
+            headers=self._headers,
             params={
                 "datetime": f"{start:%Y-%m-%dT%H:%M:%SZ}/{fetched_at:%Y-%m-%dT%H:%M:%SZ}",
                 "f": "CoverageJSON",
@@ -195,7 +199,7 @@ class OperaVolumeClient:
         )
 
     def download_frame(self, frame: RadarFrame) -> bytes:
-        response = self._client.get(frame.url)
+        response = self._client.get(frame.url, headers=self._headers)
         response.raise_for_status()
         if not response.content.startswith(b"\x89HDF\r\n\x1a\n"):
             raise OperaVolumeProtocolError(f"{frame.filename} is not an HDF5 response")

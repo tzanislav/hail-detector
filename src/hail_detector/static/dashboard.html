@@ -10,7 +10,7 @@
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/static/dashboard.css?v=adaptive-polling" />
+    <link rel="stylesheet" href="/static/dashboard.css?v=warning-map-dots" />
   </head>
   <body>
     <main class="dashboard-shell">
@@ -32,6 +32,9 @@
           <span><i class="legend prediction"></i> Projection</span>
           <span><i class="legend volume"></i> Experimental volume profile</span>
           <span><i class="legend target"></i> Target radius</span>
+          <span><i class="legend warning-moderate"></i> Moderate warning</span>
+          <span><i class="legend warning-severe"></i> Severe warning</span>
+          <span><i class="legend warning-extreme"></i> Extreme warning</span>
         </div>
         <div class="map-timeline" aria-label="OPERA frame history">
           <button id="liveButton" class="map-timeline__live is-live" type="button">Live</button>
@@ -50,6 +53,22 @@
           <p>Observed OPERA maximum-reflectivity cells and their short-horizon projections.</p>
         </header>
         <div id="trackList" class="track-list"><p class="muted">Loading storm tracks...</p></div>
+      </section>
+
+      <section class="warning-section" aria-labelledby="warningHeading">
+        <header class="section-heading">
+          <p class="eyebrow">OFFICIAL METEOROLOGICAL WARNINGS</p>
+          <h2 id="warningHeading">Bulgaria warnings</h2>
+          <p>Issued by Bulgaria's national weather service and distributed through MeteoAlarm. They are context only and do not change radar tracking or hail alerts.</p>
+        </header>
+        <div class="warning-subsection" aria-labelledby="sofiaWarningHeading">
+          <h3 id="sofiaWarningHeading" class="warning-subheading">Sofia city <span lang="bg">(София град)</span></h3>
+          <div id="sofiaWarning" class="sofia-warning"><p class="muted">Loading official Sofia warnings...</p></div>
+        </div>
+        <div class="warning-subsection" aria-labelledby="bulgariaWarningHeading">
+          <h3 id="bulgariaWarningHeading" class="warning-subheading">All Bulgaria</h3>
+          <div id="warningList" class="warning-list"><p class="muted">Loading official Bulgaria warnings...</p></div>
+        </div>
       </section>
 
       <section class="action-row" aria-label="Radar controls">
@@ -109,6 +128,6 @@
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
-    <script src="/static/dashboard.js?v=adaptive-polling"></script>
+    <script src="/static/dashboard.js?v=warning-map-dots"></script>
   </body>
 </html>

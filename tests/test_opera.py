@@ -123,6 +123,23 @@ def test_parser_accepts_only_timestamped_opera_dbzh_hdf5_links() -> None:
     assert frames[0].observed_at == datetime(2026, 8, 25, 10, 55, tzinfo=timezone.utc)
 
 
+def test_opera_client_sends_the_api_key_as_a_header() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["apikey"] == "test-opera-key"
+        assert "apikey" not in request.url.params
+        return httpx.Response(200, json=_coverage_payload())
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        snapshot = OperaClient(
+            "https://api.example.test/opera",
+            timedelta(minutes=70),
+            http_client,
+            api_key="test-opera-key",
+        ).fetch_snapshot(datetime(2026, 8, 25, 11, 0, tzinfo=timezone.utc))
+
+    assert snapshot.frames[0].filename == OPERA_FILE
+
+
 def test_opera_qualification_rejects_weak_fragments_but_keeps_intense_cores(
     tmp_path: Path,
 ) -> None:

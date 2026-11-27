@@ -47,6 +47,8 @@ class ArchiveStore:
         self.opera_volume_frames_dir = self.opera_volume_dir / "frames"
         self.opera_volume_metadata_dir = self.opera_volume_dir / "metadata"
         self.opera_volume_status_dir = self.opera_volume_dir / "status"
+        self.warnings_dir = root / "warnings"
+        self.warnings_status_dir = self.warnings_dir / "status"
 
     @staticmethod
     def _atomic_write(path: Path, content: bytes) -> None:
@@ -412,6 +414,15 @@ class ArchiveStore:
 
     def read_opera_volume_status(self) -> dict[str, Any] | None:
         path = self.opera_volume_status_dir / "latest.json"
+        if not path.is_file():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def write_warnings_status(self, status: dict[str, Any]) -> None:
+        self._atomic_write(self.warnings_status_dir / "latest.json", self._json_bytes(status))
+
+    def read_warnings_status(self) -> dict[str, Any] | None:
+        path = self.warnings_status_dir / "latest.json"
         if not path.is_file():
             return None
         return json.loads(path.read_text(encoding="utf-8"))

@@ -18,6 +18,9 @@ DEFAULT_OPERA_VOLUME_API_URL = (
     "https://api.meteogate.eu/eu-eumetnet-weather-radar/collections/"
     f"observations/locations/{DEFAULT_OPERA_VOLUME_RADAR_ID}"
 )
+DEFAULT_WARNINGS_API_URL = (
+    "https://api.meteogate.eu/warnings/collections/warnings/locations/BG"
+)
 
 
 def _positive_int(name: str, default: int) -> int:
@@ -167,7 +170,7 @@ class Settings:
     tracker_maximum_gap: timedelta
     tracker_maximum_speed_kmh: int
     nearby_track_poll_interval_seconds: int = 600
-    nearby_track_distance_km: float = 100.0
+    nearby_track_distance_km: float = 50.0
     nearby_track_hold_updates: int = 5
     frame_retention: timedelta = timedelta(hours=24)
     tracker_motion_window_observations: int = 5
@@ -177,6 +180,9 @@ class Settings:
     alert_lifecycle: AlertLifecycleSettings = field(default_factory=AlertLifecycleSettings)
     opera_enabled: bool = True
     opera_api_url: str = DEFAULT_OPERA_API_URL
+    opera_api_key: str | None = None
+    warnings_enabled: bool = True
+    warnings_api_url: str = DEFAULT_WARNINGS_API_URL
     opera_lookback: timedelta = timedelta(minutes=70)
     opera_maximum_frame_age: timedelta = timedelta(minutes=15)
     opera_segmentation_minimum_dbz: int = 35
@@ -213,7 +219,7 @@ class Settings:
                 "HAIL_NEARBY_TRACK_POLL_INTERVAL_SECONDS", 600
             ),
             nearby_track_distance_km=_positive_float(
-                "HAIL_NEARBY_TRACK_DISTANCE_KM", 100.0
+                "HAIL_NEARBY_TRACK_DISTANCE_KM", 50.0
             ),
             nearby_track_hold_updates=_positive_int(
                 "HAIL_NEARBY_TRACK_HOLD_UPDATES", 5
@@ -248,6 +254,9 @@ class Settings:
             ),
             opera_enabled=_boolean("HAIL_OPERA_ENABLED", True),
             opera_api_url=os.getenv("HAIL_OPERA_API_URL", DEFAULT_OPERA_API_URL),
+            opera_api_key=os.getenv("OPERA_API_KEY") or None,
+            warnings_enabled=_boolean("HAIL_WARNINGS_ENABLED", True),
+            warnings_api_url=os.getenv("HAIL_WARNINGS_API_URL", DEFAULT_WARNINGS_API_URL),
             opera_lookback=timedelta(
                 minutes=_positive_int("HAIL_OPERA_LOOKBACK_MINUTES", 70)
             ),

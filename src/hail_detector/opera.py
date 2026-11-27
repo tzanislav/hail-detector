@@ -194,11 +194,14 @@ class OperaClient:
         api_url: str,
         lookback: timedelta,
         client: httpx.Client | None = None,
+        *,
+        api_key: str | None = None,
     ):
         self.api_url = api_url
         self.lookback = lookback
         self._client = client or httpx.Client(timeout=60.0, follow_redirects=True)
         self._owns_client = client is None
+        self._headers = {"apikey": api_key} if api_key else {}
 
     def close(self) -> None:
         if self._owns_client:
@@ -218,6 +221,7 @@ class OperaClient:
         start = fetched_at - self.lookback
         response = self._client.get(
             self.api_url,
+            headers=self._headers,
             params={
                 "datetime": f"{start:%Y-%m-%dT%H:%M:%SZ}/{fetched_at:%Y-%m-%dT%H:%M:%SZ}",
                 "f": "CoverageJSON",

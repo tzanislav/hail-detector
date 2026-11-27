@@ -511,6 +511,163 @@ function renderTracks(tracker, assessments, volume) {
   }).join("");
 }
 
+function warningSeverityClass(severity) {
+  const normalized = String(severity || "").toLowerCase();
+  if (["minor", "moderate", "major", "severe", "extreme"].includes(normalized)) return normalized;
+  return "unknown";
+}
+
+// MeteoAlarm area names (normally Bulgarian) that denote Sofia city. Sofia
+// province ("Софийска област") is a separate area and is deliberately excluded.
+const SOFIA_AREA_NAMES = new Set(["софия град", "град софия", "софия", "sofia city", "sofia grad", "sofia"]);
+const WARNING_SEVERITY_RANK = { unknown: 0, minor: 1, moderate: 2, major: 3, severe: 3, extreme: 4 };
+
+function isSofiaArea(area) {
+  const normalized = String(area || "").toLowerCase().replace(/[-–_]/g, " ").replace(/\s+/g, " ").trim();
+  return SOFIA_AREA_NAMES.has(normalized);
+}
+
+function warningValidityLabel(warning) {
+  if (warning.effective || warning.onset) {
+    return `From ${dateLabel(warning.effective || warning.onset)} until ${dateLabel(warning.expires)}`;
+  }
+  return warning.expires ? `Until ${dateLabel(warning.expires)}` : "Validity time unavailable";
+}
+
+function renderSofiaWarningCard(state, feed, warnings) {
+  let severityClass = "unknown";
+  let level = "Status unknown";
+  let body;
+  if (state === "disabled") {
+    body = "<p>Official warning updates are turned off, so Sofia's warning status is not being checked.</p>";
+  } else if (state !== "ready") {
+    body = `<p>Sofia's warning status is unknown: ${escapeHtml(feed?.error || feed?.detail || "waiting for the first update")}.</p>`;
+  } else {
+    const sofiaWarnings = warnings.filter((warning) => Array.isArray(warning.areas) && warning.areas.some(isSofiaArea));
+    if (!sofiaWarnings.length) {
+      severityClass = "clear";
+      level = "No warnings";
+      body = "<p>No current or upcoming official warnings for Sofia city.</p>";
+    } else {
+      const worst = sofiaWarnings.reduce((highest, warning) => (
+        WARNING_SEVERITY_RANK[warningSeverityClass(warning.severity)] > WARNING_SEVERITY_RANK[warningSeverityClass(highest.severity)] ? warning : highest
+      ));
+      severityClass = warningSeverityClass(worst.severity);
+      level = worst.severity || "Unknown";
+      const items = sofiaWarnings.map((warning) => `<li><strong>${escapeHtml(warning.event || "Official weather warning")}</strong> · ${escapeHtml(warning.severity || "Unknown")}<span class="warning-meta">${escapeHtml(warningValidityLabel(warning))}</span></li>`).join("");
+      body = `<p>${sofiaWarnings.length} official warning${sofiaWarnings.length === 1 ? "" : "s"} in effect or upcoming for Sofia city:</p><ul class="sofia-warning-items">${items}</ul>`;
+    }
+  }
+  return `<article class="warning-card sofia-card ${severityClass}"><header><h4>Official warnings for Sofia city</h4><span class="warning-level">${escapeHtml(level)}</span></header>${body}</article>`;
+}
+
+function renderWarnings(feed) {
+  const list = document.getElementById("warningList");
+  const state = feed?.state || "starting";
+  const warnings = state === "ready" && Array.isArray(feed.warnings) ? feed.warnings : [];
+  document.getElementById("sofiaWarning").innerHTML = renderSofiaWarningCard(state, feed, warnings);
+  drawWarningAreas(warnings);
+  if (state === "disabled") {
+    list.innerHTML = '<p class="muted">Official Bulgaria warning updates are turned off.</p>';
+    return;
+  }
+  if (state !== "ready") {
+    list.innerHTML = `<p class="muted">Official Bulgaria warnings are unavailable: ${escapeHtml(feed?.error || feed?.detail || "waiting for the first update")}.</p>`;
+    return;
+  }
+  if (!warnings.length) {
+    list.innerHTML = '<p class="muted">No current or upcoming official warnings were returned for Bulgaria.</p>';
+    return;
+  }
+  list.innerHTML = warnings.map((warning, index) => {
+    const areas = Array.isArray(warning.areas) ? warning.areas.filter(Boolean) : [];
+    const displayedAreas = areas.slice(0, 6).join(", ");
+    const remainingAreas = areas.length > 6 ? ` +${areas.length - 6} more` : "";
+    const event = warning.event || "Official weather warning";
+    const severity = warning.severity || "Unknown";
+    const headline = warning.headline && warning.headline !== event ? warning.headline : "";
+    return `<article class="warning-card ${warningSeverityClass(severity)}" data-warning-index="${index}"><header><h4>${escapeHtml(event)}</h4><span class="warning-level">${escapeHtml(severity)}</span></header>${headline ? `<p>${escapeHtml(headline)}</p>` : ""}<p class="warning-meta">${escapeHtml(warningValidityLabel(warning))}</p>${displayedAreas ? `<p class="warning-areas"><strong>Areas:</strong> ${escapeHtml(displayedAreas + remainingAreas)}</p>` : ""}</article>`;
+  }).join("");
+}
+
+// Administrative-centre coordinates for Bulgaria's 28 provinces, keyed by the
+// Bulgarian MeteoAlarm area name with an English alias. Sofia province has no
+// separate centre (it surrounds the city), so a point inside it is used.
+const WARNING_AREA_LOCATIONS = [
+  ["Благоевград", "Blagoevgrad", 42.0209, 23.0943], ["Бургас", "Burgas", 42.5048, 27.4626],
+  ["Варна", "Varna", 43.2141, 27.9147], ["Велико Търново", "Veliko Tarnovo", 43.0757, 25.6172],
+  ["Видин", "Vidin", 43.9962, 22.8679], ["Враца", "Vratsa", 43.2102, 23.5529],
+  ["Габрово", "Gabrovo", 42.8742, 25.3187], ["Добрич", "Dobrich", 43.5726, 27.8273],
+  ["Кърджали", "Kardzhali", 41.6338, 25.3777], ["Кюстендил", "Kyustendil", 42.2839, 22.6911],
+  ["Ловеч", "Lovech", 43.137, 24.7142], ["Монтана", "Montana", 43.4085, 23.2257],
+  ["Пазарджик", "Pazardzhik", 42.1928, 24.3336], ["Перник", "Pernik", 42.6052, 23.0378],
+  ["Плевен", "Pleven", 43.417, 24.6067], ["Пловдив", "Plovdiv", 42.1354, 24.7453],
+  ["Разград", "Razgrad", 43.5333, 26.5167], ["Русе", "Ruse", 43.8356, 25.9657],
+  ["Силистра", "Silistra", 44.1171, 27.2606], ["Сливен", "Sliven", 42.6817, 26.3229],
+  ["Смолян", "Smolyan", 41.5774, 24.7011], ["София град", "Sofia city", 42.6977, 23.3219],
+  ["Софийска област", "Sofia province", 42.75, 23.8], ["Стара Загора", "Stara Zagora", 42.4258, 25.6345],
+  ["Търговище", "Targovishte", 43.2512, 26.5722], ["Хасково", "Haskovo", 41.9344, 25.5554],
+  ["Шумен", "Shumen", 43.2706, 26.9229], ["Ямбол", "Yambol", 42.4842, 26.5035],
+];
+const WARNING_DOT_COLORS = { minor: "#e8b400", moderate: "#e8b400", major: "#e8731c", severe: "#e8731c", extreme: "#c0392b", unknown: "#7d7a73" };
+
+function normalizeAreaName(area) {
+  return String(area || "").toLowerCase().replace(/[-–_]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+const warningAreaLookup = new Map();
+for (const [bgName, enName, latitude, longitude] of WARNING_AREA_LOCATIONS) {
+  const entry = { name: bgName, englishName: enName, latitude, longitude };
+  warningAreaLookup.set(normalizeAreaName(bgName), entry);
+  warningAreaLookup.set(normalizeAreaName(enName), entry);
+}
+for (const alias of SOFIA_AREA_NAMES) warningAreaLookup.set(alias, warningAreaLookup.get("софия град"));
+
+map.createPane("warningPane").style.zIndex = 405;
+const warningLayer = L.layerGroup().addTo(map);
+
+function drawWarningAreas(warnings) {
+  warningLayer.clearLayers();
+  const areas = new Map();
+  warnings.forEach((warning, index) => {
+    for (const areaName of Array.isArray(warning.areas) ? warning.areas : []) {
+      const location = warningAreaLookup.get(normalizeAreaName(areaName));
+      if (!location) continue;
+      const area = areas.get(location.name) || { location, indexes: [], worst: "unknown" };
+      area.indexes.push(index);
+      const severity = warningSeverityClass(warning.severity);
+      if (WARNING_SEVERITY_RANK[severity] > WARNING_SEVERITY_RANK[area.worst]) area.worst = severity;
+      areas.set(location.name, area);
+    }
+  });
+  for (const { location, indexes, worst } of areas.values()) {
+    const label = `${location.name} (${location.englishName}) · ${worst === "unknown" ? "Unknown level" : worst[0].toUpperCase() + worst.slice(1)} · ${indexes.length} warning${indexes.length === 1 ? "" : "s"}`;
+    L.circleMarker([location.latitude, location.longitude], {
+      pane: "warningPane", radius: 11, color: "#ffffff", weight: 2, fillColor: WARNING_DOT_COLORS[worst], fillOpacity: 0.9,
+    })
+      .bindTooltip(escapeHtml(label), { direction: "top", offset: [0, -8] })
+      .on("click", () => highlightWarningCards(location, indexes))
+      .addTo(warningLayer);
+  }
+}
+
+function highlightWarningCards(location, indexes) {
+  document.querySelectorAll(".warning-card.is-highlighted").forEach((card) => card.classList.remove("is-highlighted"));
+  const cards = indexes
+    .map((index) => document.querySelector(`#warningList .warning-card[data-warning-index="${index}"]`))
+    .filter(Boolean);
+  if (location.name === "София град") {
+    const sofiaCard = document.querySelector("#sofiaWarning .warning-card");
+    if (sofiaCard) cards.unshift(sofiaCard);
+  }
+  for (const card of cards) {
+    // Restart the highlight animation even when the same card is chosen again.
+    void card.offsetWidth;
+    card.classList.add("is-highlighted");
+  }
+  cards[0]?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
 function drawMap(status, tracker, cells, { displayFrame = null, historical = false } = {}) {
   layers.clearLayers();
   mapTrackLocations.clear();
@@ -622,6 +779,7 @@ async function refreshDashboard() {
     }
     renderStatus(status);
     renderTracks(tracker, assessments, status.volume);
+    renderWarnings(status.warnings);
     updateTimelineControls();
     await renderTimelineMap();
   } catch (error) {

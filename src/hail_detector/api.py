@@ -16,6 +16,7 @@ from .hail_risk_agent import HailRiskAgent, HailRiskResearchError
 from .opera import OperaClient, OperaIngestionService
 from .opera_volume import OperaVolumeClient, OperaVolumeIngestionService
 from .telegram import TelegramNotifier
+from .warnings import WarningsClient, WarningsIngestionService
 
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -232,6 +233,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "experimental": True,
             "detail": "No Craiova volume poll has been recorded yet.",
         }
+        current["warnings"] = archive.read_warnings_status() or {
+            "source": "MeteoAlarm official warnings via MeteoGate",
+            "country_code": "BG",
+            "state": "starting" if settings.warnings_enabled else "disabled",
+            "detail": "No Bulgaria warning poll has been recorded yet.",
+            "warning_count": 0,
+            "warnings": [],
+        }
         return current
 
     @app.get("/health")
@@ -268,6 +277,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "detail": "No Craiova volume poll has been recorded yet.",
         }
 
+    @app.get("/warnings/bulgaria")
+    def bulgaria_warnings() -> dict[str, object]:
+        return archive.read_warnings_status() or {
+            "source": "MeteoAlarm official warnings via MeteoGate",
+            "country_code": "BG",
+            "state": "starting" if settings.warnings_enabled else "disabled",
+            "detail": "No Bulgaria warning poll has been recorded yet.",
+            "warning_count": 0,
+            "warnings": [],
+        }
+
     @app.get("/opera/history")
     def opera_history(hours: int = 24) -> dict[str, object]:
         if not 1 <= hours <= 24:
@@ -300,7 +320,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     else None
                 )
                 try:
-                    with OperaClient(settings.opera_api_url, settings.opera_lookback) as client:
+                    with OperaClient(
+                        settings.opera_api_url,
+                        settings.opera_lookback,
+                        api_key=settings.opera_api_key,
+                    ) as client:
                         result = OperaIngestionService(
                             settings,
                             archive,
@@ -310,12 +334,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         ).poll_once().as_dict()
                     if settings.opera_volume_enabled:
                         with OperaVolumeClient(
-                            settings.opera_volume_api_url, settings.opera_volume_lookback
+                            settings.opera_volume_api_url,
+                            settings.opera_volume_lookback,
+                            api_key=settings.opera_api_key,
                         ) as volume_client:
                             volume = OperaVolumeIngestionService(
                                 settings, archive, volume_client
                             ).poll_once()
                         result["volume"] = volume.as_dict(settings)
+                    if settings.warnings_enabled:
+                        with WarningsClient(
+                            settings.warnings_api_url, settings.opera_api_key
+                        ) as warnings_client:
+                            warnings = WarningsIngestionService(
+                                archive, warnings_client
+                            ).poll_once()
+                        result["warnings"] = warnings.as_dict()
                     return result
                 finally:
                     if notifier is not None:

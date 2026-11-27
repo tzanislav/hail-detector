@@ -103,6 +103,23 @@ def test_volume_parser_accepts_nested_dbzh_links_with_minute_timestamps() -> Non
     assert frames[0].observed_at == datetime(2026, 8, 25, 10, 55, tzinfo=timezone.utc)
 
 
+def test_volume_client_sends_the_api_key_as_a_header() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["apikey"] == "test-opera-key"
+        assert "apikey" not in request.url.params
+        return httpx.Response(200, json=_coverage_payload())
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as http_client:
+        snapshot = OperaVolumeClient(
+            "https://api.example.test/volume",
+            timedelta(minutes=15),
+            http_client,
+            api_key="test-opera-key",
+        ).fetch_snapshot(datetime(2026, 8, 25, 11, 0, tzinfo=timezone.utc))
+
+    assert snapshot.frames[0].filename == VOLUME_FILE
+
+
 def test_volume_profile_reports_local_maximum_by_elevation() -> None:
     profile = extract_opera_volume_profile(
         _volume_hdf5(),

@@ -73,8 +73,10 @@ the manual, background-process deployment mode.
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
 | `HAIL_POLL_INTERVAL_SECONDS` | `1800` | Standard automatic polling interval (30 minutes). |
-| `HAIL_NEARBY_TRACK_POLL_INTERVAL_SECONDS` / `HAIL_NEARBY_TRACK_DISTANCE_KM` / `HAIL_NEARBY_TRACK_HOLD_UPDATES` | `600` / `100` / `5` | A fresh track within 100 km of the protected-circle edge temporarily switches automatic primary and volume updates to 10 minutes for the next five updates. |
+| `HAIL_NEARBY_TRACK_POLL_INTERVAL_SECONDS` / `HAIL_NEARBY_TRACK_DISTANCE_KM` / `HAIL_NEARBY_TRACK_HOLD_UPDATES` | `600` / `50` / `5` | A fresh track within 50 km of the protected-circle edge temporarily switches automatic primary and volume updates to 10 minutes for the next five updates. |
 | `HAIL_OPERA_ENABLED` | `true` | Enable the primary OPERA DBZH composite poller. |
+| `OPERA_API_KEY` | unset | Optional MeteoGate API key, sent as an `apikey` request header for authenticated rate limits. Keep it secret. |
+| `HAIL_WARNINGS_ENABLED` / `HAIL_WARNINGS_API_URL` | `true` / Bulgaria MeteoGate endpoint | Retrieve and display official MeteoAlarm Bulgaria warnings below tracked storms. This context never changes radar tracking or hail-alert decisions. |
 | `HAIL_OPERA_LOOKBACK_MINUTES` / `HAIL_OPERA_MAX_FRAME_AGE_MINUTES` | `70` / `15` | Recent archive window and freshness requirement. |
 | `HAIL_OPERA_SEGMENT_MINIMUM_DBZ` / `HAIL_OPERA_SEGMENT_MINIMUM_PIXELS` | `35` / `2` | Sensitive raw-component segmentation threshold. |
 | `HAIL_OPERA_STORM_MIN_AREA_SQUARE_KM` / `HAIL_OPERA_STORM_MIN_45DBZ_CORE_SQUARE_KM` | `30` / `8` | Broad-cell operational tracking gate. |

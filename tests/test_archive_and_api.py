@@ -108,10 +108,12 @@ def test_opera_readiness_and_alert_state_are_exposed(tmp_path: Path) -> None:
     archive = ArchiveStore(tmp_path)
     archive.write_opera_status({"state": "ready", "alert_processing_deferred": False})
     archive.write_alert_state({"records": [{"track_id": "track-001"}]})
+    archive.write_warnings_status({"state": "ready", "warnings": [{"event": "Thunderstorm"}]})
     app = create_app(settings)
 
     health = asyncio.run(_get(app, "/health"))
     alerts = asyncio.run(_get(app, "/alerts"))
+    warnings = asyncio.run(_get(app, "/warnings/bulgaria"))
 
     assert health.status_code == 200
     assert health.json()["primary_source"] == "eumetnet_opera_dbzh_maximum_reflectivity"
@@ -132,6 +134,7 @@ def test_opera_readiness_and_alert_state_are_exposed(tmp_path: Path) -> None:
         },
     }
     assert alerts.json()["records"] == [{"track_id": "track-001"}]
+    assert warnings.json() == {"state": "ready", "warnings": [{"event": "Thunderstorm"}]}
 
 
 def test_status_shows_telegram_alerts_paused_until_a_fresh_opera_cycle(tmp_path: Path) -> None:
@@ -165,6 +168,7 @@ def test_dashboard_and_opera_archive_endpoints_are_available(tmp_path: Path) -> 
     assert dashboard.status_code == 200
     assert "Hail detector" in dashboard.text
     assert 'id="telegramAlertStatus"' in dashboard.text
+    assert 'id="warningList"' in dashboard.text
     assert overlay.content == b"opera-overlay"
     assert cells.json()["cells"] == [{"cell_id": "cell-001"}]
     assert history.json()["frames"] == [

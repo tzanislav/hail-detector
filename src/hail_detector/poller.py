@@ -12,6 +12,7 @@ from .hail_risk_agent import HailRiskAgent
 from .opera import OperaClient, OperaIngestionService
 from .opera_volume import OperaVolumeClient, OperaVolumeIngestionService
 from .telegram import TelegramNotifier
+from .warnings import WarningsClient, WarningsIngestionService
 
 
 def main() -> None:
@@ -31,7 +32,11 @@ def main() -> None:
         else None
     )
     opera_client = (
-        OperaClient(settings.opera_api_url, settings.opera_lookback)
+        OperaClient(
+            settings.opera_api_url,
+            settings.opera_lookback,
+            api_key=settings.opera_api_key,
+        )
         if settings.opera_enabled
         else None
     )
@@ -47,13 +52,27 @@ def main() -> None:
         else None
     )
     volume_client = (
-        OperaVolumeClient(settings.opera_volume_api_url, settings.opera_volume_lookback)
+        OperaVolumeClient(
+            settings.opera_volume_api_url,
+            settings.opera_volume_lookback,
+            api_key=settings.opera_api_key,
+        )
         if settings.opera_volume_enabled
         else None
     )
     volume_service = (
         OperaVolumeIngestionService(settings, archive, volume_client)
         if volume_client is not None
+        else None
+    )
+    warnings_client = (
+        WarningsClient(settings.warnings_api_url, settings.opera_api_key)
+        if settings.warnings_enabled
+        else None
+    )
+    warnings_service = (
+        WarningsIngestionService(archive, warnings_client)
+        if warnings_client is not None
         else None
     )
 
@@ -85,8 +104,10 @@ def main() -> None:
             )
         if volume_service is not None:
             volume_service.poll_once()
+        if warnings_service is not None:
+            warnings_service.poll_once()
 
-    if opera_service is not None or volume_service is not None:
+    if opera_service is not None or volume_service is not None or warnings_service is not None:
         scheduler.add_job(
             poll_sources,
             trigger="interval",
@@ -104,6 +125,8 @@ def main() -> None:
             opera_client.close()
         if volume_client is not None:
             volume_client.close()
+        if warnings_client is not None:
+            warnings_client.close()
         if telegram_notifier is not None:
             telegram_notifier.close()
         if hail_risk_agent is not None:

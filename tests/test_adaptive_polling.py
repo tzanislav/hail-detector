@@ -62,7 +62,7 @@ def test_nearby_track_starts_five_following_rapid_automatic_updates(tmp_path: Pa
     assert archive.read_opera_polling_state() == {
         "mode": "standard",
         "nearby_track_detected": False,
-        "nearby_track_distance_km": 100.0,
+        "nearby_track_distance_km": 50.0,
         "next_poll_interval_seconds": settings.poll_interval_seconds,
         "rapid_poll_interval_seconds": RAPID_POLL_INTERVAL_SECONDS,
         "rapid_updates_remaining": 0,

@@ -280,6 +280,10 @@ if command -v curl >/dev/null; then
 fi
 '@
 
+# The deployment helper runs under Bash on Linux; preserve its required LF
+# line endings even when this PowerShell file is checked out on Windows.
+$remoteScript = $remoteScript.Replace("`r`n", "`n")
+
 $encodedRemoteScript = [Convert]::ToBase64String(
     [Text.Encoding]::UTF8.GetBytes($remoteScript)
 )
