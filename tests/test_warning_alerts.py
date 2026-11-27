@@ -85,11 +85,48 @@ def test_sends_once_per_day_and_again_the_next_day(tmp_path) -> None:
     assert "Official weather warning — Sofia city" in message
     assert "🔴 Red / Extreme" in message
     assert "Sat 28 Nov 08:00 → Tue 01 Dec 00:00 (Sofia time)" in message
+    # Midpoint of 28 Nov 08:00 → 1 Dec 00:00 Sofia is 29 Nov 16:00.
+    assert message.startswith("⚠️ TOMORROW — Official weather warning")
 
     next_day = MIDDAY + timedelta(days=1)
     assert alerter.process(warnings, next_day).status == "sent"
     assert len(telegram.messages) == 2
     assert "Updated" not in telegram.messages[1]
+
+
+@pytest.mark.parametrize(
+    ("onset", "expires", "label"),
+    [
+        ("2026-11-28T08:00:00+00:00", "2026-11-28T16:00:00+00:00", "TODAY"),
+        ("2026-11-26T08:00:00+00:00", "2026-11-28T16:00:00+00:00", "TODAY"),  # under way
+        ("2026-11-29T06:00:00+00:00", "2026-11-29T18:00:00+00:00", "TOMORROW"),
+        ("2026-12-01T06:00:00+00:00", "2026-12-01T18:00:00+00:00", "IN 3 DAYS"),
+    ],
+)
+def test_message_starts_with_the_day_of_the_warning_midpoint(
+    tmp_path, onset: str, expires: str, label: str
+) -> None:
+    telegram = _Telegram()
+    alerter = _alerter(tmp_path, telegram)
+    warning = {**_warning("Severe", expires=expires), "onset": onset}
+    assert alerter.process([warning], MIDDAY).status == "sent"
+    assert telegram.messages[0].startswith(f"⚠️ {label} — ")
+
+
+def test_warnings_on_different_days_are_each_labelled(tmp_path) -> None:
+    telegram = _Telegram()
+    alerter = _alerter(tmp_path, telegram)
+    today = {**_warning("Severe", expires="2026-11-28T16:00:00+00:00"), "alert_id": "a"}
+    later = {
+        **_warning("Extreme", expires="2026-11-30T18:00:00+00:00"),
+        "alert_id": "b",
+        "onset": "2026-11-30T06:00:00+00:00",
+    }
+    assert alerter.process([today, later], MIDDAY).status == "sent"
+    message = telegram.messages[0]
+    assert message.startswith("⚠️ TODAY — ")
+    assert "🟠 Today: Orange / Severe" in message
+    assert "🔴 In 2 days: Red / Extreme" in message
 
 
 def test_new_or_changed_warning_sends_an_update_the_same_day(tmp_path) -> None:

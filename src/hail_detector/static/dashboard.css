@@ -103,7 +103,7 @@ h2 { margin: 0; color: var(--ink); font-size: clamp(1.3rem, 1.9vw, 1.7rem); font
 }
 .warning-card { scroll-margin: 6rem; transition: box-shadow .2s ease; }.warning-card.is-highlighted { outline: 2px solid var(--ink); outline-offset: 3px; animation: warning-card-flash 1.6s ease-out 1; }
 @keyframes warning-card-flash { 0%, 35% { box-shadow: 0 0 0 .55rem rgba(232, 115, 28, .35); } 100% { box-shadow: 0 0 0 0 rgba(232, 115, 28, 0); } }
-.legend.warning-moderate { background: #e8b400; }.legend.warning-severe { background: #e8731c; }.legend.warning-extreme { background: #c0392b; }
+.legend[class*="warning-"] { border-radius: 1px; opacity: .85; }.legend.warning-moderate { background: #e8b400; }.legend.warning-severe { background: #e8731c; }.legend.warning-extreme { background: #c0392b; }
 @media (prefers-reduced-motion: reduce) { .warning-card.is-highlighted { animation: none; } }
 .telegram-test-dialog { width: min(28rem, calc(100% - 2rem)); }
 .telegram-test-form { display: grid; gap: .55rem; }.telegram-test-form > p:first-child { margin-bottom: .45rem; color: var(--text-muted); font-size: .76rem; line-height: 1.55; }

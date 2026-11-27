@@ -169,7 +169,9 @@ class SofiaWarningAlerter:
                 changed = {fp for fp in fingerprints if fp not in previously_sent}
                 if sent_today and not changed:
                     continue
-                text = self._message(qualifying, fingerprints, changed if sent_today else set())
+                text = self._message(
+                    qualifying, fingerprints, changed if sent_today else set(), now
+                )
                 try:
                     outcome = self.notifier.deliver_to(self.archive, chat_id, text)
                 except TelegramDeliveryError as error:
@@ -230,24 +232,61 @@ class SofiaWarningAlerter:
             return "unknown"
         return parsed.astimezone(self.timezone).strftime("%a %d %b %H:%M")
 
+    def _days_until(self, warning: dict[str, Any], now: datetime) -> int | None:
+        """Local calendar days from now to the midpoint of the warning's window.
+
+        The window runs from onset (falling back to effective) to expires; with
+        only one end known, that end is used. A midpoint already in the past
+        (the warning is under way) counts as today.
+        """
+        start = _parse_time(warning.get("onset") or warning.get("effective"))
+        end = _parse_time(warning.get("expires"))
+        if start is None and end is None:
+            return None
+        if start is None or end is None:
+            midpoint = start or end
+        else:
+            midpoint = start + (end - start) / 2
+        today = now.astimezone(self.timezone).date()
+        days = (midpoint.astimezone(self.timezone).date() - today).days
+        return max(days, 0)
+
+    @staticmethod
+    def _day_label(days: int | None) -> str | None:
+        if days is None:
+            return None
+        if days == 0:
+            return "Today"
+        if days == 1:
+            return "Tomorrow"
+        return f"In {days} days"
+
     def _message(
         self,
         warnings: list[dict[str, Any]],
         fingerprints: list[str],
         changed: set[str],
+        now: datetime,
     ) -> str:
         title = (
             "Updated official weather warning — Sofia city (София град)"
             if changed
             else "Official weather warning — Sofia city (София град)"
         )
-        blocks = [f"⚠️ {title}"]
-        for warning, fingerprint in zip(warnings, fingerprints):
+        day_offsets = [self._days_until(warning, now) for warning in warnings]
+        known_offsets = [days for days in day_offsets if days is not None]
+        lead_label = self._day_label(min(known_offsets)) if known_offsets else None
+        blocks = [f"⚠️ {lead_label.upper()} — {title}" if lead_label else f"⚠️ {title}"]
+        # Label each warning too when they fall on different days.
+        label_each = len(set(day_offsets)) > 1
+        for warning, fingerprint, days in zip(warnings, fingerprints, day_offsets):
             severity = str(warning.get("severity") or "").lower()
             icon, colour = NOTIFIABLE_SEVERITIES[severity]
             event = warning.get("event") or "Official weather warning"
             marker = " (new/updated)" if fingerprint in changed else ""
-            lines = [f"{icon} {colour} / {warning.get('severity')}: {event}{marker}"]
+            day_label = self._day_label(days) if label_each else None
+            prefix = f"{day_label}: " if day_label else ""
+            lines = [f"{icon} {prefix}{colour} / {warning.get('severity')}: {event}{marker}"]
             headline = warning.get("headline")
             if headline and headline != event:
                 lines.append(str(headline))

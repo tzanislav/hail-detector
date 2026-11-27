@@ -30,6 +30,7 @@ src/hail_detector.egg-info/dependency_links.txt
 src/hail_detector.egg-info/entry_points.txt
 src/hail_detector.egg-info/requires.txt
 src/hail_detector.egg-info/top_level.txt
+src/hail_detector/static/bulgaria-provinces.geojson
 src/hail_detector/static/dashboard.css
 src/hail_detector/static/dashboard.html
 src/hail_detector/static/dashboard.js

@@ -623,10 +623,25 @@ for (const [bgName, enName, latitude, longitude] of WARNING_AREA_LOCATIONS) {
 }
 for (const alias of SOFIA_AREA_NAMES) warningAreaLookup.set(alias, warningAreaLookup.get("софия град"));
 
-map.createPane("warningPane").style.zIndex = 405;
+// Warning areas sit above the base tiles but below the radar overlay pane (400),
+// so province fills tint the map without hiding the reflectivity imagery.
+map.createPane("warningPane").style.zIndex = 350;
 const warningLayer = L.layerGroup().addTo(map);
 
+// Rough province outlines (geoBoundaries ADM1, public domain), simplified to
+// roughly 400 m. Keyed by the normalised English province name.
+const provinceShapes = new Map();
+let latestWarnings = [];
+fetch("/static/bulgaria-provinces.geojson")
+  .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
+  .then((collection) => {
+    for (const feature of collection.features || []) provinceShapes.set(normalizeAreaName(feature.properties?.name), feature);
+    drawWarningAreas(latestWarnings);
+  })
+  .catch((error) => console.warn("Province outlines unavailable; falling back to area markers.", error));
+
 function drawWarningAreas(warnings) {
+  latestWarnings = warnings;
   warningLayer.clearLayers();
   const areas = new Map();
   warnings.forEach((warning, index) => {
@@ -634,19 +649,34 @@ function drawWarningAreas(warnings) {
       const location = warningAreaLookup.get(normalizeAreaName(areaName));
       if (!location) continue;
       const area = areas.get(location.name) || { location, indexes: [], worst: "unknown" };
-      area.indexes.push(index);
+      if (!area.indexes.includes(index)) area.indexes.push(index);
       const severity = warningSeverityClass(warning.severity);
       if (WARNING_SEVERITY_RANK[severity] > WARNING_SEVERITY_RANK[area.worst]) area.worst = severity;
       areas.set(location.name, area);
     }
   });
-  for (const { location, indexes, worst } of areas.values()) {
+
+  if (provinceShapes.size) {
+    // Faint outlines for every province give the coloured areas context.
+    for (const feature of provinceShapes.values()) {
+      L.geoJSON(feature, { pane: "warningPane", interactive: false, style: { color: "#6f6c66", weight: 0.8, opacity: 0.45, fill: false } }).addTo(warningLayer);
+    }
+  }
+
+  // Draw least severe first so the most severe borders end up on top.
+  const ordered = [...areas.values()].sort((a, b) => WARNING_SEVERITY_RANK[a.worst] - WARNING_SEVERITY_RANK[b.worst]);
+  for (const { location, indexes, worst } of ordered) {
     const label = `${location.name} (${location.englishName}) · ${worst === "unknown" ? "Unknown level" : worst[0].toUpperCase() + worst.slice(1)} · ${indexes.length} warning${indexes.length === 1 ? "" : "s"}`;
-    L.circleMarker([location.latitude, location.longitude], {
-      pane: "warningPane", radius: 11, color: "#ffffff", weight: 2, fillColor: WARNING_DOT_COLORS[worst], fillOpacity: 0.9,
-    })
-      .bindTooltip(escapeHtml(label), { direction: "top", offset: [0, -8] })
+    const color = WARNING_DOT_COLORS[worst];
+    const shape = provinceShapes.get(normalizeAreaName(location.englishName));
+    const layer = shape
+      ? L.geoJSON(shape, { pane: "warningPane", style: { color, weight: 2, opacity: 0.9, fillColor: color, fillOpacity: 0.28 } })
+      : L.circleMarker([location.latitude, location.longitude], { pane: "warningPane", radius: 11, color: "#ffffff", weight: 2, fillColor: color, fillOpacity: 0.9 });
+    layer
+      .bindTooltip(escapeHtml(label), { sticky: Boolean(shape), direction: "top", offset: [0, -8] })
       .on("click", () => highlightWarningCards(location, indexes))
+      .on("mouseover", (event) => event.layer?.setStyle?.({ fillOpacity: 0.45 }))
+      .on("mouseout", (event) => event.layer?.setStyle?.({ fillOpacity: 0.28 }))
       .addTo(warningLayer);
   }
 }
