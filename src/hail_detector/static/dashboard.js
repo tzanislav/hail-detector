@@ -789,6 +789,60 @@ async function refreshDashboard() {
   } finally { button.disabled = false; }
 }
 
+const telegramTestDialog = document.getElementById("telegramTestDialog");
+const telegramTestForm = document.getElementById("telegramTestForm");
+const telegramTestPassword = document.getElementById("telegramTestPassword");
+const telegramTestResult = document.getElementById("telegramTestResult");
+const telegramTestSubmit = document.getElementById("telegramTestSubmit");
+
+function showTelegramTestResult(message, state) {
+  telegramTestResult.textContent = message;
+  telegramTestResult.className = `telegram-test-result ${state}`;
+}
+
+function closeTelegramTestDialog() {
+  telegramTestPassword.value = "";
+  if (typeof telegramTestDialog.close === "function") telegramTestDialog.close();
+  else telegramTestDialog.removeAttribute("open");
+}
+
+document.getElementById("telegramTestButton").addEventListener("click", () => {
+  telegramTestPassword.value = "";
+  showTelegramTestResult("", "");
+  if (typeof telegramTestDialog.showModal === "function") telegramTestDialog.showModal();
+  else telegramTestDialog.setAttribute("open", "");
+  telegramTestPassword.focus();
+});
+document.getElementById("telegramTestClose").addEventListener("click", closeTelegramTestDialog);
+document.getElementById("telegramTestCancel").addEventListener("click", closeTelegramTestDialog);
+telegramTestDialog.addEventListener("click", (event) => {
+  if (event.target === telegramTestDialog) closeTelegramTestDialog();
+});
+telegramTestForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  telegramTestSubmit.disabled = true;
+  showTelegramTestResult("Sending…", "pending");
+  try {
+    const response = await fetch("/telegram/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: telegramTestPassword.value }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = typeof result.detail === "string" ? result.detail : `The server returned ${response.status}.`;
+      throw new Error(detail);
+    }
+    telegramTestPassword.value = "";
+    showTelegramTestResult(`Test message sent at ${dateLabel(result.sent_at)}. Check Telegram.`, "success");
+  } catch (error) {
+    showTelegramTestResult(error.message || "The test could not be sent.", "error");
+    telegramTestPassword.select();
+  } finally {
+    telegramTestSubmit.disabled = false;
+  }
+});
+
 const guideDialog = document.getElementById("guideDialog");
 document.getElementById("guideButton").addEventListener("click", () => {
   if (typeof guideDialog.showModal === "function") guideDialog.showModal();

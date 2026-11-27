@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 import os
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
@@ -111,6 +112,11 @@ class TelegramSettings:
     chat_id: str | None = None
     request_timeout_seconds: float = 10.0
     maximum_event_age: timedelta = timedelta(minutes=10)
+    # Required by the dashboard's "Test Telegram" button; unset disables it.
+    test_password: str | None = field(default=None, repr=False)
+    # Let anyone send "sub" to the bot to receive every alert as well as the
+    # owner chat above. The hail-detector-bot service handles the commands.
+    subscriptions_enabled: bool = True
 
     def __post_init__(self) -> None:
         if self.enabled and not self.bot_token:
@@ -121,6 +127,31 @@ class TelegramSettings:
             raise ValueError("Telegram request timeout must be positive")
         if self.maximum_event_age <= timedelta(0):
             raise ValueError("Telegram maximum event age must be positive")
+
+
+@dataclass(frozen=True)
+class SofiaWarningAlertSettings:
+    """Telegram messages for official Severe/Extreme warnings covering Sofia city.
+
+    These limits apply only to official MeteoAlarm warnings; radar hail alerts
+    are delivered independently and are never held back by them.
+    """
+
+    enabled: bool = True
+    timezone: str = "Europe/Sofia"
+    quiet_start_hour: int = 23
+    quiet_end_hour: int = 9
+
+    def __post_init__(self) -> None:
+        for hour in (self.quiet_start_hour, self.quiet_end_hour):
+            if not 0 <= hour <= 23:
+                raise ValueError("Sofia warning quiet hours must be between 0 and 23")
+        if self.quiet_start_hour == self.quiet_end_hour:
+            raise ValueError("Sofia warning quiet hours must start and end at different times")
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError) as error:
+            raise ValueError(f"unknown Sofia warning time zone: {self.timezone}") from error
 
 
 @dataclass(frozen=True)
@@ -200,6 +231,9 @@ class Settings:
     opera_volume_maximum_frame_age: timedelta = timedelta(minutes=15)
     opera_volume_maximum_beam_height_metres: int = 20_000
     telegram: TelegramSettings = field(default_factory=TelegramSettings)
+    sofia_warning_alerts: SofiaWarningAlertSettings = field(
+        default_factory=SofiaWarningAlertSettings
+    )
     hail_risk_agent: HailRiskAgentSettings = field(default_factory=HailRiskAgentSettings)
 
     @classmethod
@@ -312,6 +346,20 @@ class Settings:
                 ),
                 maximum_event_age=timedelta(
                     minutes=_positive_int("HAIL_TELEGRAM_MAX_EVENT_AGE_MINUTES", 10)
+                ),
+                test_password=os.getenv("HAIL_TELEGRAM_TEST_PASSWORD") or None,
+                subscriptions_enabled=_boolean(
+                    "HAIL_TELEGRAM_SUBSCRIPTIONS_ENABLED", True
+                ),
+            ),
+            sofia_warning_alerts=SofiaWarningAlertSettings(
+                enabled=_boolean("HAIL_SOFIA_WARNING_TELEGRAM_ENABLED", True),
+                timezone=os.getenv("HAIL_SOFIA_WARNING_TIMEZONE", "Europe/Sofia"),
+                quiet_start_hour=_bounded_int(
+                    "HAIL_SOFIA_WARNING_QUIET_START_HOUR", 23, minimum=0, maximum=23
+                ),
+                quiet_end_hour=_bounded_int(
+                    "HAIL_SOFIA_WARNING_QUIET_END_HOUR", 9, minimum=0, maximum=23
                 ),
             ),
             hail_risk_agent=HailRiskAgentSettings(

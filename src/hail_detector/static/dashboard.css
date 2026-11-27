@@ -105,3 +105,10 @@ h2 { margin: 0; color: var(--ink); font-size: clamp(1.3rem, 1.9vw, 1.7rem); font
 @keyframes warning-card-flash { 0%, 35% { box-shadow: 0 0 0 .55rem rgba(232, 115, 28, .35); } 100% { box-shadow: 0 0 0 0 rgba(232, 115, 28, 0); } }
 .legend.warning-moderate { background: #e8b400; }.legend.warning-severe { background: #e8731c; }.legend.warning-extreme { background: #c0392b; }
 @media (prefers-reduced-motion: reduce) { .warning-card.is-highlighted { animation: none; } }
+.telegram-test-dialog { width: min(28rem, calc(100% - 2rem)); }
+.telegram-test-form { display: grid; gap: .55rem; }.telegram-test-form > p:first-child { margin-bottom: .45rem; color: var(--text-muted); font-size: .76rem; line-height: 1.55; }
+.telegram-test-form label { color: var(--ink); font-size: .68rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.telegram-test-form input { min-height: 2.5rem; padding: 0 .7rem; border: 1px solid var(--line); border-radius: 0; background: var(--canvas); color: var(--ink); font: inherit; font-size: .85rem; }.telegram-test-form input:focus-visible { border-color: var(--ink); outline: 2px solid var(--ink); outline-offset: 1px; }
+.telegram-test-result { min-height: 1.2rem; margin: 0; font-size: .74rem; line-height: 1.45; }.telegram-test-result.pending { color: var(--text-muted); }.telegram-test-result.success { color: var(--success); font-weight: 700; }.telegram-test-result.error { color: var(--sale); font-weight: 700; }
+.telegram-test-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .35rem; }.telegram-test-actions button { min-height: 2.5rem; padding: 0 .9rem; border: 1px solid var(--ink); background: var(--canvas); color: var(--ink); font-size: .76rem; font-weight: 700; }.telegram-test-actions .button-primary { background: var(--ink); color: var(--canvas); }.telegram-test-actions button:disabled { cursor: wait; opacity: .55; }
+@media (max-width: 720px) { .action-row__buttons #telegramTestButton { grid-column: 1 / -1; } }

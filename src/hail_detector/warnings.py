@@ -4,12 +4,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+import logging
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import httpx
 
 from .archive import ArchiveStore
+
+if TYPE_CHECKING:
+    from .warning_alerts import SofiaWarningAlerter
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 MAX_WARNING_PAGES = 5
@@ -215,9 +222,15 @@ class WarningsClient:
 class WarningsIngestionService:
     """Persist a safe, compact official-warning snapshot for the dashboard."""
 
-    def __init__(self, archive: ArchiveStore, client: WarningsClient):
+    def __init__(
+        self,
+        archive: ArchiveStore,
+        client: WarningsClient,
+        sofia_alerter: "SofiaWarningAlerter | None" = None,
+    ):
         self.archive = archive
         self.client = client
+        self.sofia_alerter = sofia_alerter
 
     def poll_once(self, now: datetime | None = None) -> WarningsPollResult:
         fetched_at = now or datetime.now(timezone.utc)
@@ -230,4 +243,9 @@ class WarningsIngestionService:
         except Exception as error:
             result = WarningsPollResult("error", fetched_at, (), str(error))
         self.archive.write_warnings_status(result.as_dict())
+        if self.sofia_alerter is not None and result.state == "ready":
+            try:
+                self.sofia_alerter.process(result.warnings, fetched_at)
+            except Exception:  # never let a notification problem break ingestion
+                LOGGER.exception("Sofia warning Telegram processing failed")
         return result

@@ -14,6 +14,18 @@ Telegram delivery is enabled only for a fresh OPERA composite when all of these 
 
 This is a severe-reflectivity signature, not confirmation of hail and not an official weather warning. Transitions are deduplicated per track, and alerts expire only after 20 minutes of fresh non-qualifying data.
 
+## Official Sofia warning messages
+
+When Telegram is enabled, the poller also sends a message when an official MeteoAlarm warning of **Severe (orange)** or **Extreme (red)** level covers Sofia city (София град; Sofia province is not included). These rules apply only to official warnings — radar hail alerts are always sent immediately and are never held back by them:
+
+- no messages between 23:00 and 09:00 Sofia time; a warning that arrives overnight is sent at 09:00 if it has not ended by then;
+- at most one message per day, unless a new or changed Sofia warning appears, which sends an update;
+- a failed delivery is retried on the next poll.
+
+## Telegram subscriptions
+
+Anyone can send `sub` (or `/subscribe`) to the bot to receive every radar hail alert and Sofia warning, and `unsub` (or `/stop`) to leave; `status` says whether they are subscribed. Replies are in Bulgarian. `HAIL_TELEGRAM_CHAT_ID` always receives alerts regardless. The commands are handled by the separate `hail-detector-bot` service (`python -m hail_detector.telegram_bot`), which long-polls Telegram, so no public HTTPS endpoint is needed. Subscribers are stored as one file per chat under `var/radar/telegram/subscribers/`. A subscriber who blocks the bot is removed automatically; other failed sends are retried only for the chats that missed them. While the bot service is running, `hail-detector-telegram-chat-id` will usually find no waiting message, because the bot has already consumed it — stop the bot first.
+
 ## Optional web-researched hail-risk gate
 
 Set `HAIL_LLM_ENABLED=true` and provide `OPENAI_API_KEY` to require a second, internet-backed assessment before Telegram delivery. A confirmed track is sent to the agent only when it is projected to enter the target radius within `HAIL_LLM_MAXIMUM_LEAD_MINUTES` and reaches `HAIL_LLM_CANDIDATE_MINIMUM_DBZ`. The agent receives the current latitude/longitude, recent radar observations, dBZ bands, cell areas, trajectory, target region, and any matching experimental volume profile.
@@ -95,6 +107,10 @@ the manual, background-process deployment mode.
 | `HAIL_LLM_TIMEOUT_SECONDS` / `HAIL_LLM_MAX_OUTPUT_TOKENS` | `90` / `6000` | Bound the external research call's latency and response size. The output budget includes high-reasoning tokens. |
 | `HAIL_TELEGRAM_ENABLED` | `false` | Enable Telegram delivery of eligible OPERA alert transitions. |
 | `HAIL_TELEGRAM_BOT_TOKEN` / `HAIL_TELEGRAM_CHAT_ID` | unset | Required when Telegram is enabled. Keep the token secret. |
+| `HAIL_TELEGRAM_TEST_PASSWORD` | unset | Password for the dashboard's **Test Telegram** button, which sends a test message through the server and bot. The button is disabled on the server while this is unset. Keep it secret. |
+| `HAIL_TELEGRAM_SUBSCRIPTIONS_ENABLED` | `true` | Let anyone send `sub` to the bot to receive every alert too (`unsub` to stop). Needs the `hail-detector-bot` service. |
+| `HAIL_SOFIA_WARNING_TELEGRAM_ENABLED` | `true` | When Telegram is enabled, also send official Severe/Extreme MeteoAlarm warnings that cover Sofia city (see below). |
+| `HAIL_SOFIA_WARNING_QUIET_START_HOUR` / `HAIL_SOFIA_WARNING_QUIET_END_HOUR` / `HAIL_SOFIA_WARNING_TIMEZONE` | `23` / `9` / `Europe/Sofia` | Quiet hours for Sofia warning messages only. |
 | `HAIL_ENV_FILE` | `.env` | Optional dotenv path; process environment values take precedence. |
 
 ## Verify

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hmac
+import time
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -9,17 +11,23 @@ from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from .archive import ArchiveStore
 from .config import Settings
 from .hail_risk_agent import HailRiskAgent, HailRiskResearchError
 from .opera import OperaClient, OperaIngestionService
 from .opera_volume import OperaVolumeClient, OperaVolumeIngestionService
-from .telegram import TelegramNotifier
+from .telegram import TelegramDeliveryError, TelegramNotifier
 from .warnings import WarningsClient, WarningsIngestionService
 
 
 STATIC_DIR = Path(__file__).parent / "static"
+TELEGRAM_TEST_MINIMUM_INTERVAL_SECONDS = 3.0
+
+
+class TelegramTestRequest(BaseModel):
+    password: str = Field(default="", max_length=200)
 
 
 def _safe_filename(filename: str) -> str:
@@ -205,6 +213,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     opera_fetch_lock = Lock()
     hail_risk_test_lock = Lock()
+    telegram_test_lock = Lock()
+    telegram_test_last_attempt = [float("-inf")]
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/", include_in_schema=False)
@@ -360,6 +370,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return await run_in_threadpool(poll_once)
         finally:
             opera_fetch_lock.release()
+
+    @app.post("/telegram/test")
+    async def test_telegram(request: TelegramTestRequest) -> dict[str, object]:
+        """Send a password-protected test message through the configured bot."""
+
+        if not settings.telegram.enabled:
+            raise HTTPException(status_code=409, detail="Telegram is turned off on the server.")
+        expected = settings.telegram.test_password
+        if not expected:
+            raise HTTPException(
+                status_code=409,
+                detail="Telegram testing is not set up: HAIL_TELEGRAM_TEST_PASSWORD is missing on the server.",
+            )
+        if not telegram_test_lock.acquire(blocking=False):
+            raise HTTPException(status_code=429, detail="A Telegram test is already in progress.")
+        try:
+            # Slow down password guessing: one attempt every few seconds.
+            now = time.monotonic()
+            if now - telegram_test_last_attempt[0] < TELEGRAM_TEST_MINIMUM_INTERVAL_SECONDS:
+                raise HTTPException(status_code=429, detail="Please wait a few seconds and try again.")
+            telegram_test_last_attempt[0] = now
+            if not hmac.compare_digest(request.password.encode("utf-8"), expected.encode("utf-8")):
+                raise HTTPException(status_code=401, detail="Incorrect password.")
+
+            sent_at = datetime.now(timezone.utc)
+
+            def send() -> None:
+                notifier = TelegramNotifier(settings.telegram)
+                try:
+                    notifier.send_message(
+                        "✅ Hail detector test message\n"
+                        "Sent from the dashboard. Telegram delivery is working.\n"
+                        "This is a test, not a weather alert."
+                    )
+                finally:
+                    notifier.close()
+
+            try:
+                await run_in_threadpool(send)
+            except TelegramDeliveryError as error:
+                raise HTTPException(status_code=502, detail=f"Telegram did not accept the test: {error}") from error
+            return {"sent": True, "sent_at": sent_at.isoformat()}
+        finally:
+            telegram_test_lock.release()
 
     @app.post("/hail-risk/test/{track_id}")
     async def test_hail_risk_agent(track_id: str) -> dict[str, object]:

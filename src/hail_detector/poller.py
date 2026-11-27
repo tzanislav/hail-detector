@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timezone
 import logging
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -12,6 +13,7 @@ from .hail_risk_agent import HailRiskAgent
 from .opera import OperaClient, OperaIngestionService
 from .opera_volume import OperaVolumeClient, OperaVolumeIngestionService
 from .telegram import TelegramNotifier
+from .warning_alerts import SofiaWarningAlerter
 from .warnings import WarningsClient, WarningsIngestionService
 
 
@@ -70,8 +72,15 @@ def main() -> None:
         if settings.warnings_enabled
         else None
     )
+    sofia_alerter = (
+        SofiaWarningAlerter(settings.sofia_warning_alerts, archive, telegram_notifier)
+        if telegram_notifier is not None
+        and warnings_client is not None
+        and settings.sofia_warning_alerts.enabled
+        else None
+    )
     warnings_service = (
-        WarningsIngestionService(archive, warnings_client)
+        WarningsIngestionService(archive, warnings_client, sofia_alerter)
         if warnings_client is not None
         else None
     )
@@ -116,6 +125,20 @@ def main() -> None:
             max_instances=1,
             coalesce=True,
             misfire_grace_time=settings.poll_interval_seconds,
+        )
+    if sofia_alerter is not None and warnings_service is not None:
+        # Send official Sofia warnings that arrived overnight as soon as the
+        # quiet hours end, instead of waiting for the next regular poll.
+        scheduler.add_job(
+            warnings_service.poll_once,
+            trigger="cron",
+            hour=settings.sofia_warning_alerts.quiet_end_hour,
+            minute=0,
+            timezone=ZoneInfo(settings.sofia_warning_alerts.timezone),
+            id="sofia-warning-quiet-hours-end",
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=900,
         )
     try:
         poll_sources()

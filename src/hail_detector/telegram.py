@@ -19,6 +19,10 @@ class TelegramDeliveryError(RuntimeError):
     """A safe-to-log failure while talking to Telegram."""
 
 
+class TelegramChatUnreachable(TelegramDeliveryError):
+    """Telegram refused the chat for good (HTTP 403), e.g. the user blocked the bot."""
+
+
 @dataclass(frozen=True)
 class TelegramDeliveryResult:
     attempted: int = 0
@@ -72,14 +76,14 @@ class TelegramNotifier:
             )
         )
 
-    def _send_text(self, text: str) -> None:
+    def _send_text(self, text: str, chat_id: str | None = None) -> None:
         # Do not include the request URL in errors/logs: it contains the bot
         # token. A short Telegram API description is safe and useful here.
         endpoint = f"{TELEGRAM_API_URL}/bot{self.settings.bot_token}/sendMessage"
         try:
             response = self.client.post(
                 endpoint,
-                json={"chat_id": self.settings.chat_id, "text": text},
+                json={"chat_id": chat_id or self.settings.chat_id, "text": text},
             )
         except httpx.HTTPError as error:
             raise TelegramDeliveryError("Telegram network request failed") from error
@@ -92,7 +96,10 @@ class TelegramNotifier:
             except ValueError:
                 pass
             detail = f": {description}" if description else ""
-            raise TelegramDeliveryError(
+            error_type = (
+                TelegramChatUnreachable if response.status_code == 403 else TelegramDeliveryError
+            )
+            raise error_type(
                 f"Telegram rejected the request (HTTP {response.status_code}){detail}"
             )
         try:
@@ -102,11 +109,45 @@ class TelegramNotifier:
         if not accepted:
             raise TelegramDeliveryError("Telegram did not accept the message")
 
+    def send_message(self, text: str, chat_id: str | None = None) -> None:
+        """Send a plain-text message to one chat (the owner chat by default).
+
+        Raises TelegramDeliveryError on failure.
+        """
+        self._send_text(text, chat_id)
+
     def send_test_message(self) -> None:
         self._send_text(
             "Hail detector Telegram delivery is connected. "
             "This is a test message, not a weather alert."
         )
+
+    def recipients(self, archive: ArchiveStore) -> list[str]:
+        """The owner chat first, then every subscriber, without duplicates."""
+        owner = str(self.settings.chat_id)
+        chats = [owner]
+        if self.settings.subscriptions_enabled:
+            chats.extend(
+                chat_id for chat_id in archive.read_telegram_subscriber_ids() if chat_id != owner
+            )
+        return chats
+
+    def deliver_to(self, archive: ArchiveStore, chat_id: str, text: str) -> str:
+        """Send an alert to one recipient.
+
+        Returns "delivered", or "removed" when a subscriber has blocked the bot
+        (they are unsubscribed and need no retry). Raises TelegramDeliveryError
+        for failures worth retrying, including any failure for the owner chat.
+        """
+        try:
+            self._send_text(text, chat_id)
+        except TelegramChatUnreachable:
+            if chat_id == str(self.settings.chat_id):
+                raise
+            archive.remove_telegram_subscriber(chat_id)
+            LOGGER.info("Removed a Telegram subscriber that can no longer be reached")
+            return "removed"
+        return "delivered"
 
     def deliver_pending(
         self,
@@ -138,22 +179,41 @@ class TelegramNotifier:
                 continue
 
             attempted += 1
-            try:
-                self._send_text(self._message_for(event))
-            except TelegramDeliveryError as error:
+            event_id = str(event["event_id"])
+            text = self._message_for(event)
+            done = archive.read_notification_progress(event_id)
+            errors: list[str] = []
+            for chat_id in self.recipients(archive):
+                if chat_id in done:
+                    continue
+                try:
+                    self.deliver_to(archive, chat_id, text)
+                except TelegramDeliveryError as error:
+                    errors.append(str(error))
+                    continue
+                done.add(chat_id)
+
+            if errors:
                 # The event stays in the outbox without a terminal receipt, so
-                # the next fresh poll can retry it. The message never includes
-                # the bot-token-bearing request URL.
-                LOGGER.warning("Telegram delivery failed for event %s: %s", event["event_id"], error)
+                # the next fresh poll retries only the chats that missed it.
+                # The message never includes the bot-token-bearing request URL.
+                archive.write_notification_progress(event_id, done)
+                LOGGER.warning(
+                    "Telegram delivery failed for event %s to %s chat(s): %s",
+                    event_id,
+                    len(errors),
+                    errors[0],
+                )
                 failed += 1
                 continue
 
             archive.write_notification_delivery(
-                str(event["event_id"]),
+                event_id,
                 {
                     "event_id": event["event_id"],
                     "status": "delivered",
                     "delivered_at": delivered_at.isoformat(),
+                    "recipient_count": len(done),
                 },
             )
             delivered += 1

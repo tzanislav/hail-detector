@@ -11,7 +11,7 @@ WorkingDirectory=/home/ubuntu/hail-detector
 Environment=HAIL_ARCHIVE_DIR=/home/ubuntu/hail-detector/var/radar
 Environment=PYTHONUNBUFFERED=1
 ExecStartPre=/usr/bin/mkdir -p /home/ubuntu/hail-detector/var/radar
-ExecStart=/home/ubuntu/hail-detector/.venv/bin/python -m uvicorn hail_detector.api:app --app-dir /home/ubuntu/hail-detector/src --host 0.0.0.0 --port 8001
+ExecStart=/home/ubuntu/hail-detector/.venv/bin/python -m uvicorn hail_detector.api:app --host 0.0.0.0 --port 8001
 Restart=always
 RestartSec=5
 TimeoutStopSec=30

@@ -33,6 +33,9 @@ class ArchiveStore:
         self.alerts_dir = root / "alerts"
         self.notification_outbox_dir = root / "notification-outbox"
         self.notification_delivery_dir = root / "notification-delivery"
+        self.notification_progress_dir = root / "notification-delivery-progress"
+        self.telegram_subscribers_dir = root / "telegram" / "subscribers"
+        self.telegram_bot_dir = root / "telegram" / "bot"
         self.alert_audit_dir = root / "alert-audit"
         self.opera_dir = root / "opera"
         self.opera_frames_dir = self.opera_dir / "frames"
@@ -49,6 +52,7 @@ class ArchiveStore:
         self.opera_volume_status_dir = self.opera_volume_dir / "status"
         self.warnings_dir = root / "warnings"
         self.warnings_status_dir = self.warnings_dir / "status"
+        self.warnings_telegram_dir = self.warnings_dir / "telegram"
 
     @staticmethod
     def _atomic_write(path: Path, content: bytes) -> None:
@@ -383,6 +387,64 @@ class ArchiveStore:
         self._atomic_write(path, self._json_bytes(receipt))
         return path
 
+    def read_notification_progress(self, event_id: str) -> set[str]:
+        """Chat IDs that already received (or no longer need) an outbox event."""
+        path = self.notification_progress_dir / f"{event_id}.json"
+        if not path.is_file():
+            return set()
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        return {str(chat_id) for chat_id in loaded.get("done_chat_ids") or []}
+
+    def write_notification_progress(self, event_id: str, done_chat_ids: set[str]) -> None:
+        self._atomic_write(
+            self.notification_progress_dir / f"{event_id}.json",
+            self._json_bytes({"done_chat_ids": sorted(done_chat_ids)}),
+        )
+
+    # Telegram subscribers are one file per chat, so the bot (which adds and
+    # removes them) and the poller (which removes chats that blocked the bot)
+    # never overwrite each other's changes.
+    @staticmethod
+    def _subscriber_filename(chat_id: str) -> str:
+        text = str(chat_id)
+        if not text.lstrip("-").isdigit():
+            raise ValueError("Telegram chat IDs must be integers")
+        return f"{text}.json"
+
+    def add_telegram_subscriber(self, chat_id: str, record: dict[str, Any]) -> bool:
+        """Store a subscriber; False when the chat was already subscribed."""
+        path = self.telegram_subscribers_dir / self._subscriber_filename(chat_id)
+        if path.is_file():
+            return False
+        self._atomic_write(path, self._json_bytes(record))
+        return True
+
+    def remove_telegram_subscriber(self, chat_id: str) -> bool:
+        """Delete a subscriber; False when the chat was not subscribed."""
+        path = self.telegram_subscribers_dir / self._subscriber_filename(chat_id)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+    def is_telegram_subscriber(self, chat_id: str) -> bool:
+        return (self.telegram_subscribers_dir / self._subscriber_filename(chat_id)).is_file()
+
+    def read_telegram_subscriber_ids(self) -> list[str]:
+        if not self.telegram_subscribers_dir.is_dir():
+            return []
+        return sorted(path.stem for path in self.telegram_subscribers_dir.glob("*.json"))
+
+    def read_telegram_bot_state(self) -> dict[str, Any] | None:
+        path = self.telegram_bot_dir / "state.json"
+        if not path.is_file():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def write_telegram_bot_state(self, state: dict[str, Any]) -> None:
+        self._atomic_write(self.telegram_bot_dir / "state.json", self._json_bytes(state))
+
     def write_alert_audit(self, evaluated_at: datetime, audit: dict[str, Any]) -> Path:
         stamp = evaluated_at.strftime("%Y%m%dT%H%M%S%fZ")
         path = self.alert_audit_dir / f"{stamp}.json"
@@ -423,6 +485,17 @@ class ArchiveStore:
 
     def read_warnings_status(self) -> dict[str, Any] | None:
         path = self.warnings_status_dir / "latest.json"
+        if not path.is_file():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def write_sofia_warning_alert_state(self, state: dict[str, Any]) -> None:
+        self._atomic_write(
+            self.warnings_telegram_dir / "sofia-state.json", self._json_bytes(state)
+        )
+
+    def read_sofia_warning_alert_state(self) -> dict[str, Any] | None:
+        path = self.warnings_telegram_dir / "sofia-state.json"
         if not path.is_file():
             return None
         return json.loads(path.read_text(encoding="utf-8"))

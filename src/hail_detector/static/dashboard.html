@@ -10,7 +10,7 @@
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
       crossorigin=""
     />
-    <link rel="stylesheet" href="/static/dashboard.css?v=warning-map-dots" />
+    <link rel="stylesheet" href="/static/dashboard.css?v=telegram-test" />
   </head>
   <body>
     <main class="dashboard-shell">
@@ -74,6 +74,7 @@
       <section class="action-row" aria-label="Radar controls">
         <p>Radar signature visualisation only. This is not an official meteorological warning service.</p>
         <div class="action-row__buttons">
+          <button id="telegramTestButton" type="button">Test Telegram</button>
           <button id="refreshButton" type="button">Refresh view</button>
           <button id="fetchButton" class="button-primary" type="button">Fetch latest</button>
         </div>
@@ -93,6 +94,26 @@
         </div>
       </section>
     </main>
+
+    <dialog id="telegramTestDialog" class="guide-dialog telegram-test-dialog" aria-labelledby="telegramTestTitle">
+      <header class="guide-dialog__header">
+        <div>
+          <p class="eyebrow">TELEGRAM DELIVERY</p>
+          <h2 id="telegramTestTitle">Send a test message</h2>
+        </div>
+        <button id="telegramTestClose" class="guide-dialog__close" type="button" aria-label="Close">&times;</button>
+      </header>
+      <form id="telegramTestForm" class="guide-dialog__content telegram-test-form">
+        <p>This sends a test message to the configured Telegram chat, going through the server, so you know the whole flow works.</p>
+        <label for="telegramTestPassword">Password</label>
+        <input id="telegramTestPassword" name="password" type="password" autocomplete="off" required maxlength="200" />
+        <p id="telegramTestResult" class="telegram-test-result" role="status" aria-live="polite"></p>
+        <div class="telegram-test-actions">
+          <button id="telegramTestCancel" type="button">Cancel</button>
+          <button id="telegramTestSubmit" class="button-primary" type="submit">Send test</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="guideDialog" class="guide-dialog" aria-labelledby="guideTitle">
       <header class="guide-dialog__header">
@@ -128,6 +149,6 @@
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
-    <script src="/static/dashboard.js?v=warning-map-dots"></script>
+    <script src="/static/dashboard.js?v=telegram-test"></script>
   </body>
 </html>
